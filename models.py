@@ -106,3 +106,35 @@ class Pago(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }
+
+
+class MercadoLibreAccount(db.Model):
+    __tablename__ = 'mercado_libre_accounts'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False, unique=True)
+    meli_user_id = db.Column(db.String(64), nullable=True)
+    access_token = db.Column(db.Text, nullable=False)
+    refresh_token = db.Column(db.Text, nullable=True)
+    token_expires_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('mercado_libre_account', uselist=False))
+
+    def is_token_expired(self) -> bool:
+        if not self.token_expires_at:
+            return False
+        return datetime.utcnow() >= self.token_expires_at
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'meli_user_id': self.meli_user_id,
+            'has_refresh_token': bool(self.refresh_token),
+            'token_expires_at': self.token_expires_at.isoformat() if self.token_expires_at else None,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+        }

@@ -515,19 +515,18 @@ def create_sale():
         db.session.rollback()
         return api_error("Failed to create sale", 500)
 
-# Mercado Libre sync endpoint (MVP)
+# Mercado Libre sync endpoint (MVP - solo extracción)
 @app.route('/api/meli/sync', methods=['POST'])
 @jwt_required
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount, Venta
+        from models import MercadoLibreAccount
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
             return api_error("No Mercado Libre account linked", 400)
 
-        # Refresh token if needed (MVP: skip refresh for simplicity)
         headers = {"Authorization": f"Bearer {account.access_token}"}
 
         # Get recent orders (last 7 days) - simplified
@@ -539,42 +538,29 @@ def meli_sync_orders():
         data = res.json()
         results = data.get('results', [])
 
-        created = 0
+        # Map minimal useful fields for conciliación posterior
+        mapped = []
         for order in results:
-            order_id = str(order.get('id'))
-            total_amount = float(order.get('total_amount', 0) or 0)
-            # Commission is not directly available here; set 0 for MVP
-            comision = 0.0
-            impuestos = 0.0
-            devoluciones = 0.0
-            monto_neto = total_amount - comision - impuestos - devoluciones
+            mapped.append({
+                "order_id": order.get('id'),
+                "date_created": order.get('date_created'),
+                "currency_id": order.get('currency_id'),
+                "total_amount": order.get('total_amount'),
+                "status": order.get('status'),
+                "buyer_nickname": (order.get('buyer') or {}).get('nickname'),
+                "items": [
+                    {
+                        "title": (it.get('item') or {}).get('title'),
+                        "quantity": it.get('quantity'),
+                        "unit_price": it.get('unit_price')
+                    }
+                    for it in (order.get('order_items') or [])
+                ]
+            })
 
-            # Check if sale already exists by order_id
-            existing = db.session.execute(text("SELECT id FROM ventas WHERE order_id = :oid"), {"oid": order_id}).first()
-            if existing:
-                continue
-
-            from datetime import date
-            sale = Venta(
-                user_id=current_user_id,
-                fecha=date.today(),
-                canal='MercadoLibre',
-                monto_bruto=total_amount,
-                comision=comision,
-                impuestos=impuestos,
-                devoluciones=devoluciones,
-                monto_neto=monto_neto,
-                order_id=order_id,
-                product_name=(order.get('order_items') or [{}])[0].get('item', {}).get('title')
-            )
-            db.session.add(sale)
-            created += 1
-
-        db.session.commit()
-        return api_response({"created": created, "fetched": len(results)}, "Mercado Libre sync completed")
+        return api_response({"orders": mapped, "fetched": len(mapped)}, "Mercado Libre sync fetched orders")
     except Exception as e:
         logger.error(f"MELI sync error: {e}")
-        db.session.rollback()
         return api_error("Failed to sync Mercado Libre orders", 500)
 
 # Frontend static files

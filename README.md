@@ -137,7 +137,7 @@ salesharmony/
 1. Crea una aplicación en Mercado Libre Developer y configura el `redirect_uri`.
 2. Exporta las variables `MELI_CLIENT_ID`, `MELI_CLIENT_SECRET`, `MELI_REDIRECT_URI`.
 3. Autentica en tu app, luego abre `GET /auth/meli/url` para obtener el enlace y completa el flujo OAuth.
-4. Ejecuta `POST /api/meli/sync` con tu token JWT para traer órdenes recientes como ventas.
+4. Ejecuta `POST /api/meli/sync` con tu token JWT para traer órdenes recientes. Este endpoint SOLO extrae y devuelve datos; no crea registros de ventas.
 
 ## 🧪 Testing
 
@@ -193,7 +193,7 @@ git push heroku main
 #### Mercado Libre (MVP)
 - `GET /auth/meli/url` (JWT) - Genera URL OAuth para conectar cuenta
 - `GET /auth/meli/callback` - Callback de OAuth (configurar `MELI_REDIRECT_URI`)
-- `POST /api/meli/sync` (JWT) - Sincroniza órdenes recientes y las inserta como ventas
+- `POST /api/meli/sync` (JWT) - Sincroniza órdenes recientes y las devuelve en la respuesta (no persiste)
 
 #### Estado del Sistema
 - `GET /health` - Estado de salud del sistema

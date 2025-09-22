@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: salesharmony
+      POSTGRES_PASSWORD: salesharmony
+      POSTGRES_DB: salesharmony
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  web:
+    build: .
+    environment:
+      SESSION_SECRET: dev_super_secret
+      DATABASE_URL: postgresql+psycopg2://salesharmony:salesharmony@db:5432/salesharmony
+      FLASK_ENV: development
+      SEED_TEST_USERS: "true"
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+volumes:
+  postgres_data:

@@ -29,13 +29,10 @@ cd salesharmony
 cp .env.example .env
 # Editar .env con tus valores
 
-# Instalar dependencias Python usando uv (recomendado)
-uv sync
+# Instalar dependencias
+pip install -r requirements.txt
 
-# O usando pip desde pyproject.toml
-pip install -e .
-
-# Inicializar base de datos
+# Inicializar base de datos (SQLite por defecto)
 python -c "from app import app, db; app.app_context().push(); db.create_all()"
 ```
 
@@ -57,7 +54,7 @@ npm run dev
 **Opción 1: Desarrollo separado**
 ```bash
 # Terminal 1 - Backend
-gunicorn --bind 0.0.0.0:5000 --reuse-port --reload main:app
+gunicorn --bind 0.0.0.0:5000 app:app --reload
 
 # Terminal 2 - Frontend
 cd frontend && npm run dev
@@ -69,7 +66,7 @@ cd frontend && npm run dev
 cd frontend && npm run build
 
 # Servir todo desde Flask
-gunicorn --bind 0.0.0.0:5000 --reuse-port main:app
+gunicorn --bind 0.0.0.0:5000 app:app
 ```
 
 ## 🔐 Sistema de Autenticación
@@ -107,11 +104,10 @@ Esto creará usuarios de prueba que podrás usar para testing y desarrollo.
 ```
 salesharmony/
 ├── app.py                 # Aplicación Flask principal
-├── main.py               # Punto de entrada
-├── models.py             # Modelos de base de datos
-├── routes.py             # Rutas adicionales
-├── pyproject.toml        # Dependencias Python (uv)
-├── frontend/             # Aplicación React
+├── models.py              # Modelos de base de datos
+├── requirements.txt       # Dependencias Python
+├── pyproject.toml         # Proyecto Python (opcional)
+├── frontend/              # Aplicación React
 │   ├── src/
 │   │   ├── components/   # Componentes reutilizables
 │   │   ├── pages/        # Páginas principales
@@ -182,7 +178,8 @@ git push heroku main
 - `GET /auth/me` - Usuario actual
 
 #### Ventas
-- API de ventas en desarrollo
+- `GET /api/sales` - Listado paginado (JWT)
+- `POST /api/sales` - Crear venta (JWT)
 
 #### Estado del Sistema
 - `GET /health` - Estado de salud del sistema

@@ -6,6 +6,9 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
+from dotenv import load_dotenv
+from sqlalchemy import text, select
+from flask_migrate import Migrate
 
 # Configure logging first
 import logging
@@ -21,6 +24,7 @@ from datetime import datetime, timedelta
 JWT_AVAILABLE = True
 
 # Critical security: JWT secret must be set in environment
+load_dotenv()
 JWT_SECRET_KEY = os.environ.get("SESSION_SECRET")
 if not JWT_SECRET_KEY:
     logger.error("CRITICAL: SESSION_SECRET environment variable is required for JWT security")
@@ -58,7 +62,7 @@ def jwt_required(f):
         
         try:
             # Debug logging
-            logger.debug(f"Attempting to decode JWT token: {token[:20]}...")
+            logger.debug("Attempting to decode JWT token")
             
             # Decode and verify token
             payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
@@ -141,10 +145,16 @@ if JWT_AVAILABLE:
 
 # Initialize SQLAlchemy
 db = SQLAlchemy(app, model_class=Base)
+Migrate(app, db)
 
 # Configure CORS
 CORS(app, 
-     origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://*.replit.dev", "https://*.repl.co"],
+     origins=[
+         "http://localhost:3000",
+         "http://127.0.0.1:3000",
+         "http://localhost:5173",
+         "http://127.0.0.1:5173",
+     ],
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
@@ -240,7 +250,7 @@ def health():
     """Health check endpoint."""
     try:
         # Test database connection
-        db.session.execute(db.text("SELECT 1"))
+        db.session.execute(text("SELECT 1"))
         
         return api_response({
             "status": "healthy",
@@ -361,10 +371,11 @@ def get_sales():
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 50, type=int), 100)
         
-        # Query sales filtered by current user
-        sales = Venta.query.filter_by(user_id=user_id).paginate(
-            page=page, 
-            per_page=per_page, 
+        # Query sales filtered by current user using SQLAlchemy 2.0 style pagination
+        sales = db.paginate(
+            select(Venta).filter_by(user_id=user_id),
+            page=page,
+            per_page=per_page,
             error_out=False
         )
         

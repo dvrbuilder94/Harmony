@@ -160,14 +160,19 @@ if JWT_AVAILABLE:
 db = SQLAlchemy(app, model_class=Base)
 Migrate(app, db)
 
-# Configure CORS
-CORS(app, 
-     origins=[
-         "http://localhost:3000",
-         "http://127.0.0.1:3000",
-         "http://localhost:5173",
-         "http://127.0.0.1:5173",
-     ],
+# Configure CORS (env-driven)
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    origins_list = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    origins_list = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+CORS(app,
+     origins=origins_list,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 

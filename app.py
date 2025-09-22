@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text, select
 from flask_migrate import Migrate
 import requests
+from urllib.parse import urlencode
 
 # Configure logging first
 import logging
@@ -41,6 +42,17 @@ def create_access_token(identity):
         'iat': datetime.utcnow()
     }
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def create_state_token(user_id):
+    payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(minutes=10),
+        'iat': datetime.utcnow()
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def decode_state_token(state_token):
+    return jwt.decode(state_token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
 
 def jwt_required(f):
     """Decorator for protecting endpoints with JWT."""
@@ -350,10 +362,15 @@ def meli_auth_url():
         redirect_uri = os.environ.get('MELI_REDIRECT_URI')
         if not client_id or not redirect_uri:
             return api_error("MELI_CLIENT_ID and MELI_REDIRECT_URI are required", 500)
-        url = (
-            "https://auth.mercadolibre.com/authorization?response_type=code"
-            f"&client_id={client_id}&redirect_uri={redirect_uri}"
-        )
+        current_user_id = get_jwt_identity()
+        state = create_state_token(current_user_id)
+        params = urlencode({
+            'response_type': 'code',
+            'client_id': client_id,
+            'redirect_uri': redirect_uri,
+            'state': state
+        })
+        url = f"https://auth.mercadolibre.com/authorization?{params}"
         return api_response({"auth_url": url}, "Mercado Libre auth URL")
     except Exception as e:
         logger.error(f"MELI URL error: {e}")
@@ -363,14 +380,27 @@ def meli_auth_url():
 def meli_callback():
     try:
         code = request.args.get('code')
+        state = request.args.get('state')
         if not code:
             return api_error("Missing code", 400)
+        if not state:
+            return api_error("Missing state", 400)
 
         client_id = os.environ.get('MELI_CLIENT_ID')
         client_secret = os.environ.get('MELI_CLIENT_SECRET')
         redirect_uri = os.environ.get('MELI_REDIRECT_URI')
         if not client_id or not client_secret or not redirect_uri:
             return api_error("MELI env vars missing", 500)
+
+        # Verify state and extract user id
+        try:
+            state_payload = decode_state_token(state)
+            target_user_id = state_payload.get('user_id')
+            if not target_user_id:
+                return api_error("Invalid state payload", 400)
+        except Exception as e:
+            logger.error(f"Invalid state: {e}")
+            return api_error("Invalid state", 400)
 
         token_res = requests.post(
             "https://api.mercadolibre.com/oauth/token",
@@ -388,30 +418,47 @@ def meli_callback():
             return api_error("Failed to exchange token", 502, details=token_res.text)
         token_json = token_res.json()
 
-        # For MVP simplicity, associate to the first admin or provide JWT in state
+        # Identify correct user from state
         from models import User, MercadoLibreAccount
-        user = User.query.filter_by(role='admin').first() or User.query.first()
+        user = User.query.get(target_user_id)
         if not user:
-            return api_error("No users to attach Mercado Libre account", 500)
+            return api_error("User from state not found", 404)
 
         expires_in = token_json.get('expires_in')
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in) if expires_in else None
+
+        # Fetch Mercado Libre user info for reliable seller id
+        access_token = token_json['access_token']
+        me_res = requests.get(
+            "https://api.mercadolibre.com/users/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=20,
+        )
+        meli_user_id = None
+        if me_res.status_code == 200:
+            try:
+                me_json = me_res.json()
+                meli_user_id = str(me_json.get('id')) if me_json.get('id') else None
+            except Exception:
+                meli_user_id = token_json.get('user_id')
+        else:
+            meli_user_id = token_json.get('user_id')
 
         existing = MercadoLibreAccount.query.filter_by(user_id=user.id).first()
         if not existing:
             existing = MercadoLibreAccount(
                 user_id=user.id,
-                meli_user_id=str(token_json.get('user_id')) if token_json.get('user_id') else None,
-                access_token=token_json['access_token'],
+                meli_user_id=meli_user_id,
+                access_token=access_token,
                 refresh_token=token_json.get('refresh_token'),
                 token_expires_at=expires_at,
             )
             db.session.add(existing)
         else:
-            existing.access_token = token_json['access_token']
+            existing.access_token = access_token
             existing.refresh_token = token_json.get('refresh_token')
             existing.token_expires_at = expires_at
-            existing.meli_user_id = str(token_json.get('user_id')) if token_json.get('user_id') else existing.meli_user_id
+            existing.meli_user_id = meli_user_id or existing.meli_user_id
         db.session.commit()
 
         return api_response(existing.to_dict(), "Mercado Libre connected")
@@ -526,6 +573,36 @@ def meli_sync_orders():
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
             return api_error("No Mercado Libre account linked", 400)
+
+        # Refresh token if expired and we have refresh_token
+        if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
+            if account.refresh_token:
+                client_id = os.environ.get('MELI_CLIENT_ID')
+                client_secret = os.environ.get('MELI_CLIENT_SECRET')
+                if not client_id or not client_secret:
+                    return api_error("MELI env vars missing for refresh", 500)
+                refresh_res = requests.post(
+                    "https://api.mercadolibre.com/oauth/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "refresh_token": account.refresh_token,
+                    },
+                    headers={"Accept": "application/json"},
+                    timeout=20,
+                )
+                if refresh_res.status_code == 200:
+                    t = refresh_res.json()
+                    account.access_token = t['access_token']
+                    account.refresh_token = t.get('refresh_token', account.refresh_token)
+                    exp_in = t.get('expires_in')
+                    account.token_expires_at = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
+                    db.session.commit()
+                else:
+                    return api_error("Failed to refresh Mercado Libre token", 401, details=refresh_res.text)
+            else:
+                return api_error("Token expired and no refresh token available", 401)
 
         headers = {"Authorization": f"Bearer {account.access_token}"}
 

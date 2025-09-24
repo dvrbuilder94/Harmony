@@ -11,6 +11,7 @@ from sqlalchemy import text, select
 from flask_migrate import Migrate
 import requests
 from urllib.parse import urlencode
+from cryptography.fernet import Fernet
 
 # Configure logging first
 import logging
@@ -454,16 +455,16 @@ def meli_callback():
             existing = MercadoLibreAccount(
                 user_id=user.id,
                 meli_user_id=meli_user_id,
-                access_token=access_token,
-                refresh_token=token_json.get('refresh_token'),
+                access_token="",
+                refresh_token=None,
                 token_expires_at=expires_at,
             )
             db.session.add(existing)
         else:
-            existing.access_token = access_token
-            existing.refresh_token = token_json.get('refresh_token')
             existing.token_expires_at = expires_at
             existing.meli_user_id = meli_user_id or existing.meli_user_id
+        # Encrypt and set tokens
+        existing.set_tokens(access_token, token_json.get('refresh_token'), expires_at)
         db.session.commit()
 
         return api_response(existing.to_dict(), "Mercado Libre connected")
@@ -573,7 +574,7 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount
+        from models import MercadoLibreAccount, MLOrder, MLOrderItem
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
@@ -592,24 +593,23 @@ def meli_sync_orders():
                         "grant_type": "refresh_token",
                         "client_id": client_id,
                         "client_secret": client_secret,
-                        "refresh_token": account.refresh_token,
+                        "refresh_token": account.get_refresh_token(),
                     },
                     headers={"Accept": "application/json"},
                     timeout=20,
                 )
                 if refresh_res.status_code == 200:
                     t = refresh_res.json()
-                    account.access_token = t['access_token']
-                    account.refresh_token = t.get('refresh_token', account.refresh_token)
                     exp_in = t.get('expires_in')
-                    account.token_expires_at = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
+                    new_expires = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
+                    account.set_tokens(t['access_token'], t.get('refresh_token', account.get_refresh_token()), new_expires)
                     db.session.commit()
                 else:
                     return api_error("Failed to refresh Mercado Libre token", 401, details=refresh_res.text)
             else:
                 return api_error("Token expired and no refresh token available", 401)
 
-        headers = {"Authorization": f"Bearer {account.access_token}"}
+        headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
         # Get recent orders (last 7 days) - simplified
         created_from = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
@@ -620,30 +620,73 @@ def meli_sync_orders():
         data = res.json()
         results = data.get('results', [])
 
-        # Map minimal useful fields for conciliación posterior
-        mapped = []
+        saved = 0
         for order in results:
-            mapped.append({
-                "order_id": order.get('id'),
-                "date_created": order.get('date_created'),
-                "currency_id": order.get('currency_id'),
-                "total_amount": order.get('total_amount'),
-                "status": order.get('status'),
-                "buyer_nickname": (order.get('buyer') or {}).get('nickname'),
-                "items": [
-                    {
-                        "title": (it.get('item') or {}).get('title'),
-                        "quantity": it.get('quantity'),
-                        "unit_price": it.get('unit_price')
-                    }
-                    for it in (order.get('order_items') or [])
-                ]
-            })
+            oid = str(order.get('id'))
+            existing = MLOrder.query.filter_by(user_id=current_user_id, order_id=oid).first()
+            if existing:
+                continue
 
-        return api_response({"orders": mapped, "fetched": len(mapped)}, "Mercado Libre sync fetched orders")
+            ml_order = MLOrder(
+                user_id=current_user_id,
+                order_id=oid,
+                date_created=order.get('date_created'),
+                currency_id=order.get('currency_id'),
+                total_amount=float(order.get('total_amount') or 0),
+                status=order.get('status'),
+                buyer_nickname=(order.get('buyer') or {}).get('nickname')
+            )
+            db.session.add(ml_order)
+            db.session.flush()
+
+            for it in (order.get('order_items') or []):
+                item = MLOrderItem(
+                    ml_order_id=ml_order.id,
+                    title=(it.get('item') or {}).get('title'),
+                    quantity=it.get('quantity'),
+                    unit_price=float(it.get('unit_price') or 0)
+                )
+                db.session.add(item)
+
+            saved += 1
+
+        db.session.commit()
+        return api_response({"saved": saved, "fetched": len(results)}, "Mercado Libre sync persisted orders")
     except Exception as e:
         logger.error(f"MELI sync error: {e}")
         return api_error("Failed to sync Mercado Libre orders", 500)
+
+# Unified orders endpoint
+@app.route('/api/orders', methods=['GET'])
+@jwt_required
+def list_orders():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import MLOrder
+
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 50, type=int), 100)
+        status = request.args.get('status')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        query = MLOrder.query.filter_by(user_id=current_user_id)
+        if status:
+            query = query.filter(MLOrder.status == status)
+        if date_from:
+            query = query.filter(MLOrder.date_created >= date_from)
+        if date_to:
+            query = query.filter(MLOrder.date_created <= date_to)
+
+        orders = query.order_by(MLOrder.date_created.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        data = [o.to_dict(include_items=False) for o in orders.items]
+        return api_response({
+            "orders": data,
+            "pagination": {"page": page, "per_page": per_page, "total": orders.total, "pages": orders.pages}
+        })
+    except Exception as e:
+        logger.error(f"List orders error: {e}")
+        return api_error("Failed to list orders", 500)
 
 # Frontend static files
 @app.route('/assets/<path:path>')

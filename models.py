@@ -2,6 +2,8 @@
 from datetime import datetime
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet
+import os
 
 from app import db
 
@@ -135,6 +137,94 @@ class MercadoLibreAccount(db.Model):
             'meli_user_id': self.meli_user_id,
             'has_refresh_token': bool(self.refresh_token),
             'token_expires_at': self.token_expires_at.isoformat() if self.token_expires_at else None,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+        }
+
+    @staticmethod
+    def _get_fernet():
+        key = os.environ.get('ENCRYPTION_KEY')
+        if not key:
+            raise RuntimeError('ENCRYPTION_KEY is required for token encryption')
+        if isinstance(key, str):
+            key = key.encode()
+        return Fernet(key)
+
+    def set_tokens(self, access_token: str, refresh_token: str | None, expires_at):
+        f = self._get_fernet()
+        self.access_token = f.encrypt(access_token.encode()).decode()
+        self.refresh_token = f.encrypt(refresh_token.encode()).decode() if refresh_token else None
+        self.token_expires_at = expires_at
+
+    def get_access_token(self) -> str:
+        f = self._get_fernet()
+        return f.decrypt(self.access_token.encode()).decode()
+
+    def get_refresh_token(self) -> str | None:
+        if not self.refresh_token:
+            return None
+        f = self._get_fernet()
+        return f.decrypt(self.refresh_token.encode()).decode()
+
+
+class MLOrder(db.Model):
+    __tablename__ = 'ml_orders'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    order_id = db.Column(db.String(64), nullable=False)
+    date_created = db.Column(db.String(64), nullable=True)
+    currency_id = db.Column(db.String(8), nullable=True)
+    total_amount = db.Column(db.Float, nullable=False, default=0)
+    status = db.Column(db.String(32), nullable=True)
+    buyer_nickname = db.Column(db.String(128), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'order_id', name='uq_ml_order_user_order'),
+    )
+
+    items = db.relationship('MLOrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self, include_items: bool = True):
+        data = {
+            'id': self.id,
+            'user_id': self.user_id,
+            'order_id': self.order_id,
+            'date_created': self.date_created,
+            'currency_id': self.currency_id,
+            'total_amount': self.total_amount,
+            'status': self.status,
+            'buyer_nickname': self.buyer_nickname,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+        }
+        if include_items:
+            data['items'] = [i.to_dict() for i in self.items]
+        return data
+
+
+class MLOrderItem(db.Model):
+    __tablename__ = 'ml_order_items'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    ml_order_id = db.Column(db.String, db.ForeignKey('ml_orders.id'), nullable=False)
+    title = db.Column(db.String(512), nullable=True)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Float, nullable=False, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'ml_order_id': self.ml_order_id,
+            'title': self.title,
+            'quantity': self.quantity,
+            'unit_price': self.unit_price,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }

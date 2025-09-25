@@ -52,6 +52,18 @@ export async function syncMeli(): Promise<any> {
   return res.json()
 }
 
+export async function getMeliCreds(): Promise<{ credentials: any | null }> {
+  if ((import.meta as any).env?.VITE_MOCK === 'true') {
+    return { credentials: { client_id: 'mock', redirect_uri: 'https://example.com/auth/meli/callback' } }
+  }
+  const res = await fetch(`${getApiBase()}/integrations/meli/credentials`, {
+    headers: { 'Authorization': `Bearer ${getToken()}` }
+  })
+  if (!res.ok) throw new Error('Failed to load credentials')
+  const json = await res.json()
+  return json.data
+}
+
 export type Order = {
   id: string
   order_id: string

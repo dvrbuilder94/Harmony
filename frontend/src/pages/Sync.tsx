@@ -1,11 +1,18 @@
-import { useState } from 'react'
-import { login, setToken, getToken, getMeliAuthUrl, syncMeli } from '../api'
+import { useEffect, useState } from 'react'
+import { login, setToken, getToken, getMeliAuthUrl, syncMeli, getMeliCreds } from '../api'
 
 export default function SyncPage() {
   const [email, setEmail] = useState('a@a.com')
   const [password, setPassword] = useState('x')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [creds, setCreds] = useState<any>(null)
+  const [statusMsg, setStatusMsg] = useState<string>('')
+
+  useEffect(() => {
+    if (!getToken()) return
+    getMeliCreds().then(d => setCreds(d.credentials)).catch(() => setCreds(null))
+  }, [])
 
   const doLogin = async () => {
     setLoading(true)
@@ -30,6 +37,11 @@ export default function SyncPage() {
     try {
       const json = await syncMeli()
       setResult(json.data)
+      if (json.data && typeof json.data.fetched !== 'undefined') {
+        setStatusMsg(`Conectado. Órdenes obtenidas: ${json.data.fetched}. Guardadas: ${json.data.saved ?? 0}`)
+      } else if (json.data && json.data.orders) {
+        setStatusMsg(`Conectado. Órdenes en respuesta: ${json.data.orders.length}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -51,6 +63,10 @@ export default function SyncPage() {
           <pre className="bg-gray-100 p-3 rounded text-sm overflow-auto">{JSON.stringify(result, null, 2)}</pre>
         </div>
       )}
+      <div className="mt-6 text-sm text-gray-700">
+        <div className="mb-2"><span className="font-semibold">Estado de conexión:</span> {creds ? 'Credenciales configuradas' : 'Sin credenciales'}</div>
+        {statusMsg && <div className="text-emerald-700">{statusMsg}</div>}
+      </div>
     </div>
   )
 }

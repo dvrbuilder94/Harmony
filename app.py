@@ -490,8 +490,8 @@ def meli_callback():
         frontend_url = os.environ.get('FRONTEND_URL')
         if frontend_url:
             from flask import redirect
-            # Append a simple flag so the UI can show a success notice
-            return redirect(frontend_url.rstrip('/') + '/sync?meli=connected')
+            # Redirect to channels page after successful OAuth
+            return redirect(frontend_url.rstrip('/') + '/channels?meli=connected')
 
         return api_response(existing.to_dict(), "Mercado Libre connected")
     except Exception as e:

@@ -4,8 +4,9 @@ import { getApiBase } from './api'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Orders from './pages/Orders'
-import SyncPage from './pages/Sync'
+import Channels from './pages/Channels'
 import Settings from './pages/Settings'
+import Account from './pages/Account'
 
 function useApiBase() {
   const [base, setBase] = useState<string>('http://localhost:5000')
@@ -38,8 +39,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/orders" element={<Orders />} />
-        <Route path="/sync" element={<SyncPage />} />
+        <Route path="/channels" element={<Channels />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/account" element={<Account />} />
       </Routes>
     </Layout>
   )

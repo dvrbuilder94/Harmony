@@ -44,6 +44,7 @@ export default function Settings() {
       <h1 className="text-2xl font-bold mb-4">Configuración</h1>
       <pre className="bg-gray-100 p-3 rounded text-sm overflow-auto">{JSON.stringify(me, null, 2)}</pre>
       <h2 className="text-lg font-semibold mt-6 mb-2">Integraciones: Mercado Libre</h2>
+      <p className="text-sm text-gray-600 mb-2">La configuración de credenciales permite conectar el canal en la sección “Canales”.</p>
       <div className="grid gap-2 max-w-xl">
         <input className="border p-2 rounded" placeholder="Client ID" value={clientId} onChange={e=>setClientId(e.target.value)} />
         <input className="border p-2 rounded" placeholder="Client Secret" type="password" value={clientSecret} onChange={e=>setClientSecret(e.target.value)} />

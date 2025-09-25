@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fetchOrders, exportOrdersCsvUrl, type Order } from '../api'
+import { fetchOrders, exportOrdersCsvUrl, type Order, getToken } from '../api'
 
 export default function Orders() {
   const [status, setStatus] = useState('')
@@ -36,8 +36,8 @@ export default function Orders() {
         <input className="border p-2 rounded" placeholder="estado (paid/cancelled)" value={status} onChange={e => setStatus(e.target.value)} />
         <input className="border p-2 rounded" type="date" value={from} onChange={e => setFrom(e.target.value)} />
         <input className="border p-2 rounded" type="date" value={to} onChange={e => setTo(e.target.value)} />
-        <button className="bg-gray-900 text-white px-4 py-2 rounded" onClick={() => loadOrders(1)} disabled={loading}>Buscar</button>
-        <button className="bg-gray-600 text-white px-4 py-2 rounded" onClick={exportCsv}>Exportar CSV</button>
+        <button className="bg-gray-900 text-white px-4 py-2 rounded" onClick={() => loadOrders(1)} disabled={loading || !getToken()}>Buscar</button>
+        <button className="bg-gray-600 text-white px-4 py-2 rounded" onClick={exportCsv} disabled={!getToken()}>Exportar CSV</button>
       </div>
       <div className="flex gap-6 mb-3 text-sm text-gray-700">
         <div><span className="font-semibold">Ventas</span>: {kpis.count}</div>

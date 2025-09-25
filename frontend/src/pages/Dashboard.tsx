@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { fetchOrders, type Order } from '../api'
+import { fetchOrders, type Order, getToken } from '../api'
 
 export default function Dashboard() {
   const [orders, setOrders] = useState<Order[]>([])
   const [kpis, setKpis] = useState<{ total:number; count:number; avg:number }>({ total: 0, count: 0, avg: 0 })
 
   useEffect(() => {
+    if (!getToken()) return
     fetchOrders({ page: 1, per_page: 10 }).then(data => {
       setOrders(data.orders)
       const total = data.orders.reduce((s, o) => s + (o.total_amount || 0), 0)
@@ -23,6 +24,9 @@ export default function Dashboard() {
         <div className="border rounded p-4"><div className="text-sm text-gray-500">Ticket prom.</div><div className="text-xl font-semibold">{kpis.avg.toFixed(2)}</div></div>
       </div>
       <h2 className="text-lg font-semibold mb-2">Últimas órdenes</h2>
+      {!getToken() && (
+        <div className="mb-3 text-sm text-gray-600">Inicia sesión en la sección "Sincronización" para ver tus órdenes.</div>
+      )}
       <div className="overflow-auto border rounded">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">

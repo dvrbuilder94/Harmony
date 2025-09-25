@@ -8,6 +8,7 @@ export default function Settings() {
   const [redirectUri, setRedirectUri] = useState('')
   const [siteId, setSiteId] = useState('MLC')
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   useEffect(() => {
     if (!getToken()) return
     fetch(`${getApiBase()}/auth/me`, { headers: { Authorization: `Bearer ${getToken()}` } })
@@ -23,7 +24,7 @@ export default function Settings() {
       }).catch(() => {})
   }, [])
   const saveCreds = async () => {
-    setLoading(true)
+    setSaving(true)
     try {
       const res = await fetch(`${getApiBase()}/integrations/meli/credentials`, {
         method: 'POST',
@@ -35,6 +36,17 @@ export default function Settings() {
       setClientSecret('')
     } catch {
       alert('No se pudo guardar')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const clearAccountTokens = async () => {
+    setLoading(true)
+    try {
+      await fetch(`${getApiBase()}/integrations/meli/account`, { method: 'DELETE', headers: { Authorization: `Bearer ${getToken()}` } })
+      alert('Tokens de cuenta eliminados. Vuelve a conectar Mercado Libre.')
+    } catch {
+      alert('No se pudo eliminar tokens')
     } finally {
       setLoading(false)
     }
@@ -50,7 +62,10 @@ export default function Settings() {
         <input className="border p-2 rounded" placeholder="Client Secret" type="password" value={clientSecret} onChange={e=>setClientSecret(e.target.value)} />
         <input className="border p-2 rounded" placeholder="Redirect URI" value={redirectUri} onChange={e=>setRedirectUri(e.target.value)} />
         <input className="border p-2 rounded" placeholder="Site ID (MLC)" value={siteId} onChange={e=>setSiteId(e.target.value)} />
-        <button className="bg-gray-900 text-white px-4 py-2 rounded disabled:opacity-50" onClick={saveCreds} disabled={loading}>Guardar credenciales</button>
+        <div className="flex gap-2">
+          <button className="bg-gray-900 text-white px-4 py-2 rounded disabled:opacity-50" onClick={saveCreds} disabled={saving}>Guardar credenciales</button>
+          <button className="bg-red-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={clearAccountTokens} disabled={loading}>Eliminar tokens de cuenta</button>
+        </div>
       </div>
     </div>
   )

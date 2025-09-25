@@ -789,6 +789,22 @@ def delete_meli_credentials():
         db.session.rollback()
         return api_error("Failed to delete credentials", 500)
 
+@app.route('/integrations/meli/account', methods=['DELETE'])
+@jwt_required
+def delete_meli_account():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import MercadoLibreAccount
+        acc = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+        if acc:
+            db.session.delete(acc)
+            db.session.commit()
+        return api_response({}, "Account tokens deleted")
+    except Exception as e:
+        logger.error(f"Delete account error: {e}")
+        db.session.rollback()
+        return api_error("Failed to delete account", 500)
+
 # Webhook endpoint for Mercado Libre notifications (validation-friendly)
 @app.route('/webhooks/meli', methods=['GET', 'POST'])
 @app.route('/webhooks/meli/', methods=['GET', 'POST'])

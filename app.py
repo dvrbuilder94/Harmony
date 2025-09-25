@@ -486,6 +486,13 @@ def meli_callback():
         existing.set_tokens(access_token, token_json.get('refresh_token'), expires_at)
         db.session.commit()
 
+        # Redirect back to frontend if configured, to improve UX
+        frontend_url = os.environ.get('FRONTEND_URL')
+        if frontend_url:
+            from flask import redirect
+            # Append a simple flag so the UI can show a success notice
+            return redirect(frontend_url.rstrip('/') + '/sync?meli=connected')
+
         return api_response(existing.to_dict(), "Mercado Libre connected")
     except Exception as e:
         logger.error(f"MELI callback error: {e}")

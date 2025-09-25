@@ -372,11 +372,15 @@ def login():
 @jwt_required
 def meli_auth_url():
     try:
-        client_id = os.environ.get('MELI_CLIENT_ID')
-        redirect_uri = os.environ.get('MELI_REDIRECT_URI')
-        if not client_id or not redirect_uri:
-            return api_error("MELI_CLIENT_ID and MELI_REDIRECT_URI are required", 500)
         current_user_id = get_jwt_identity()
+        from models import MercadoLibreCredentials
+        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        if not creds:
+            return api_error("Mercado Libre credentials not configured for this user", 400)
+        client_id = creds.client_id
+        redirect_uri = creds.redirect_uri
+        if not client_id or not redirect_uri:
+            return api_error("Incomplete Mercado Libre credentials", 400)
         state = create_state_token(current_user_id)
         params = urlencode({
             'response_type': 'code',
@@ -400,11 +404,10 @@ def meli_callback():
         if not state:
             return api_error("Missing state", 400)
 
-        client_id = os.environ.get('MELI_CLIENT_ID')
-        client_secret = os.environ.get('MELI_CLIENT_SECRET')
-        redirect_uri = os.environ.get('MELI_REDIRECT_URI')
-        if not client_id or not client_secret or not redirect_uri:
-            return api_error("MELI env vars missing", 500)
+        from models import MercadoLibreCredentials
+        client_id = None
+        client_secret = None
+        redirect_uri = None
 
         # Verify state and extract user id
         try:
@@ -415,6 +418,14 @@ def meli_callback():
         except Exception as e:
             logger.error(f"Invalid state: {e}")
             return api_error("Invalid state", 400)
+
+        # Load user-specific credentials
+        creds = MercadoLibreCredentials.query.filter_by(user_id=target_user_id).first()
+        if not creds:
+            return api_error("Mercado Libre credentials not configured for this user", 400)
+        client_id = creds.client_id
+        client_secret = creds.get_client_secret()
+        redirect_uri = creds.redirect_uri
 
         token_res = requests.post(
             "https://api.mercadolibre.com/oauth/token",
@@ -582,7 +593,7 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount, MLOrder, MLOrderItem
+        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
@@ -591,8 +602,11 @@ def meli_sync_orders():
         # Refresh token if expired and we have refresh_token
         if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
             if account.refresh_token:
-                client_id = os.environ.get('MELI_CLIENT_ID')
-                client_secret = os.environ.get('MELI_CLIENT_SECRET')
+                creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+                if not creds:
+                    return api_error("Mercado Libre credentials not configured for this user", 400)
+                client_id = creds.client_id
+                client_secret = creds.get_client_secret()
                 if not client_id or not client_secret:
                     return api_error("MELI env vars missing for refresh", 500)
                 refresh_res = requests.post(
@@ -695,6 +709,72 @@ def list_orders():
     except Exception as e:
         logger.error(f"List orders error: {e}")
         return api_error("Failed to list orders", 500)
+
+# Credentials endpoints (BYO)
+@app.route('/integrations/meli/credentials', methods=['GET'])
+@jwt_required
+def get_meli_credentials():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import MercadoLibreCredentials
+        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        if not creds:
+            return api_response({"credentials": None}, "No credentials configured")
+        return api_response({"credentials": creds.to_safe_dict()}, "Credentials loaded")
+    except Exception as e:
+        logger.error(f"Get creds error: {e}")
+        return api_error("Failed to get credentials", 500)
+
+@app.route('/integrations/meli/credentials', methods=['POST'])
+@jwt_required
+def upsert_meli_credentials():
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.get_json() or {}
+        client_id = data.get('client_id')
+        client_secret = data.get('client_secret')
+        redirect_uri = data.get('redirect_uri')
+        site_id = data.get('site_id', 'MLC')
+        if not client_id or not client_secret or not redirect_uri:
+            return api_error("client_id, client_secret and redirect_uri are required", 400)
+        from models import MercadoLibreCredentials
+        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        if not creds:
+            creds = MercadoLibreCredentials(
+                user_id=current_user_id,
+                client_id=client_id,
+                site_id=site_id,
+                redirect_uri=redirect_uri,
+                client_secret_encrypted="",
+            )
+            db.session.add(creds)
+        else:
+            creds.client_id = client_id
+            creds.site_id = site_id
+            creds.redirect_uri = redirect_uri
+        creds.set_client_secret(client_secret)
+        db.session.commit()
+        return api_response({"credentials": creds.to_safe_dict()}, "Credentials saved")
+    except Exception as e:
+        logger.error(f"Upsert creds error: {e}")
+        db.session.rollback()
+        return api_error("Failed to save credentials", 500)
+
+@app.route('/integrations/meli/credentials', methods=['DELETE'])
+@jwt_required
+def delete_meli_credentials():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import MercadoLibreCredentials
+        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        if creds:
+            db.session.delete(creds)
+            db.session.commit()
+        return api_response({}, "Credentials deleted")
+    except Exception as e:
+        logger.error(f"Delete creds error: {e}")
+        db.session.rollback()
+        return api_error("Failed to delete credentials", 500)
 
 # Frontend static files
 @app.route('/assets/<path:path>')

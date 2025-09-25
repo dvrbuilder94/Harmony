@@ -228,3 +228,47 @@ class MLOrderItem(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
         }
+
+
+class MercadoLibreCredentials(db.Model):
+    __tablename__ = 'mercado_libre_credentials'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False, unique=True)
+    client_id = db.Column(db.String(128), nullable=False)
+    client_secret_encrypted = db.Column(db.Text, nullable=False)
+    site_id = db.Column(db.String(8), nullable=True)
+    redirect_uri = db.Column(db.String(500), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('mercado_libre_credentials', uselist=False))
+
+    @staticmethod
+    def _fernet() -> Fernet:
+        key = os.environ.get('ENCRYPTION_KEY')
+        if not key:
+            raise RuntimeError('ENCRYPTION_KEY is required for credentials encryption')
+        if isinstance(key, str):
+            key = key.encode()
+        return Fernet(key)
+
+    def set_client_secret(self, client_secret: str):
+        f = self._fernet()
+        self.client_secret_encrypted = f.encrypt(client_secret.encode()).decode()
+
+    def get_client_secret(self) -> str:
+        f = self._fernet()
+        return f.decrypt(self.client_secret_encrypted.encode()).decode()
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'client_id': self.client_id,
+            'site_id': self.site_id,
+            'redirect_uri': self.redirect_uri,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }

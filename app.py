@@ -436,7 +436,10 @@ def meli_callback():
                 "code": code,
                 "redirect_uri": redirect_uri,
             },
-            headers={"Accept": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
             timeout=20,
         )
         if token_res.status_code != 200:
@@ -624,7 +627,10 @@ def meli_sync_orders():
                         "client_secret": client_secret,
                         "refresh_token": account.get_refresh_token(),
                     },
-                    headers={"Accept": "application/json"},
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
                     timeout=20,
                 )
                 if refresh_res.status_code == 200:

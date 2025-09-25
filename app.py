@@ -783,6 +783,22 @@ def delete_meli_credentials():
         db.session.rollback()
         return api_error("Failed to delete credentials", 500)
 
+# Webhook endpoint for Mercado Libre notifications (validation-friendly)
+@app.route('/webhooks/meli', methods=['GET', 'POST'])
+@app.route('/webhooks/meli/', methods=['GET', 'POST'])
+def meli_webhook():
+    try:
+        if request.method == 'GET':
+            # Some providers verify by hitting the URL; respond 200 OK
+            return "ok", 200
+        payload = request.get_json(silent=True) or {}
+        logger.info(f"MELI webhook received: {payload}")
+        # TODO: queue processing if needed
+        return "ok", 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "error", 200  # still 200 to pass provider validation
+
 # Frontend static files
 @app.route('/assets/<path:path>')
 def serve_static(path):

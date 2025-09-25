@@ -161,7 +161,7 @@ if JWT_AVAILABLE:
 db = SQLAlchemy(app, model_class=Base)
 Migrate(app, db)
 
-# Configure CORS (env-driven)
+# Configure CORS (env-driven) and ensure preflight matches
 allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
 if allowed_origins_env:
     origins_list = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
@@ -172,10 +172,18 @@ else:
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
-CORS(app,
-     origins=origins_list,
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+
+# If wildcard requested, pass "*" (not ["*"])
+origins_param = "*" if len(origins_list) == 1 and origins_list[0] == "*" else origins_list
+
+CORS(
+    app,
+    resources={r"/*": {"origins": origins_param}},
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    supports_credentials=False,
+    send_wildcard=True if origins_param == "*" else False,
+)
 
 # ProxyFix for proper URL generation
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)

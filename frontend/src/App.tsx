@@ -7,6 +7,7 @@ import Orders from './pages/Orders'
 import Channels from './pages/Channels'
 import Settings from './pages/Settings'
 import Account from './pages/Account'
+import Conciliation from './pages/Conciliation'
 
 function useApiBase() {
   const [base, setBase] = useState<string>('http://localhost:5000')
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/channels" element={<Channels />} />
+        <Route path="/conciliation" element={<Conciliation />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/account" element={<Account />} />
       </Routes>

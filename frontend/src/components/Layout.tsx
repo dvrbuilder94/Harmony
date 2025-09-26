@@ -10,6 +10,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <NavLink to="/" end className={({ isActive }) => isActive ? 'font-semibold' : ''}>Dashboard</NavLink>
           <NavLink to="/orders" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Órdenes</NavLink>
           <NavLink to="/channels" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Canales</NavLink>
+          <NavLink to="/conciliation" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Conciliación</NavLink>
           <NavLink to="/settings" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Configuración</NavLink>
           <NavLink to="/account" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Cuenta</NavLink>
         </nav>

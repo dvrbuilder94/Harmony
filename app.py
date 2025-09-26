@@ -1002,6 +1002,34 @@ def conciliation_kpis():
     except Exception as e:
         logger.error(f"KPIs error: {e}")
         return api_error("Failed to load KPIs", 500)
+
+@app.route('/api/payouts', methods=['GET'])
+@jwt_required
+def list_payouts():
+    try:
+        from models import CanonPayout, CanonOrder
+        current_user_id = get_jwt_identity()
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 50, type=int), 100)
+        q = db.session.query(CanonPayout, CanonOrder).join(CanonOrder, CanonOrder.id == CanonPayout.order_id).filter(CanonOrder.user_id == current_user_id)
+        pag = q.paginate(page=page, per_page=per_page, error_out=False)
+        data = [
+            {
+                'payout_id': p.CanonPayout.id if hasattr(p, 'CanonPayout') else p[0].id,
+                'amount': (p.CanonPayout.amount if hasattr(p, 'CanonPayout') else p[0].amount),
+                'paid_out_at': (p.CanonPayout.paid_out_at if hasattr(p, 'CanonPayout') else p[0].paid_out_at),
+                'order_external_id': (p.CanonOrder.external_id if hasattr(p, 'CanonOrder') else p[1].external_id),
+                'channel': (p.CanonOrder.channel if hasattr(p, 'CanonOrder') else p[1].channel),
+            }
+            for p in pag.items
+        ]
+        return api_response({
+            'payouts': data,
+            'pagination': {'page': page, 'per_page': per_page, 'total': pag.total, 'pages': pag.pages}
+        }, "Payouts list")
+    except Exception as e:
+        logger.error(f"List payouts error: {e}")
+        return api_error("Failed to list payouts", 500)
 # Credentials endpoints (BYO)
 @app.route('/integrations/meli/credentials', methods=['GET'])
 @jwt_required

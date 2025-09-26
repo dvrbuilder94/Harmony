@@ -272,3 +272,65 @@ class MercadoLibreCredentials(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }
+
+
+# Canonical normalized models for dashboards across marketplaces
+class CanonOrder(db.Model):
+    __tablename__ = 'orders_canonical'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    channel = db.Column(db.String(32), nullable=False)  # e.g., 'meli', 'falabella'
+    external_id = db.Column(db.String(128), nullable=False)
+    created_at = db.Column(db.String(64), nullable=True)
+    status = db.Column(db.String(32), nullable=True)
+    currency_id = db.Column(db.String(8), nullable=True)
+    gross_amount = db.Column(db.Float, nullable=False, default=0)
+    net_amount = db.Column(db.Float, nullable=True)
+    buyer_name = db.Column(db.String(256), nullable=True)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'channel', 'external_id', name='uq_canon_user_channel_external'),
+    )
+
+    items = db.relationship('CanonOrderItem', backref='order', lazy=True, cascade="all, delete-orphan")
+
+    def to_ui_dict(self, include_items: bool = False):
+        data = {
+            'id': self.id,
+            'order_id': self.external_id,
+            'date_created': self.created_at,
+            'status': self.status,
+            'currency_id': self.currency_id,
+            'total_amount': self.gross_amount,
+            'buyer_nickname': self.buyer_name,
+        }
+        if include_items:
+            data['items'] = [i.to_dict() for i in self.items]
+        return data
+
+
+class CanonOrderItem(db.Model):
+    __tablename__ = 'order_items_canonical'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String, db.ForeignKey('orders_canonical.id'), nullable=False)
+    sku = db.Column(db.String(128), nullable=True)
+    title = db.Column(db.String(512), nullable=True)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Float, nullable=False, default=0)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'sku': self.sku,
+            'title': self.title,
+            'quantity': self.quantity,
+            'unit_price': self.unit_price,
+        }

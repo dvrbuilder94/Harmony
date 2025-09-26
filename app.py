@@ -603,7 +603,7 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials
+        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
@@ -685,36 +685,65 @@ def meli_sync_orders():
 
             saved += 1
 
+            # Map to canonical order
+            canon_exists = CanonOrder.query.filter_by(user_id=current_user_id, channel='meli', external_id=oid).first()
+            if not canon_exists:
+                canon = CanonOrder(
+                    user_id=current_user_id,
+                    channel='meli',
+                    external_id=oid,
+                    created_at=order.get('date_created'),
+                    status=order.get('status'),
+                    currency_id=order.get('currency_id'),
+                    gross_amount=float(order.get('total_amount') or 0),
+                    net_amount=None,
+                    buyer_name=(order.get('buyer') or {}).get('nickname'),
+                )
+                db.session.add(canon)
+                db.session.flush()
+                for it in (order.get('order_items') or []):
+                    ci = CanonOrderItem(
+                        order_id=canon.id,
+                        sku=None,
+                        title=(it.get('item') or {}).get('title'),
+                        quantity=it.get('quantity') or 1,
+                        unit_price=float(it.get('unit_price') or 0)
+                    )
+                    db.session.add(ci)
+
         db.session.commit()
         return api_response({"saved": saved, "fetched": len(results)}, "Mercado Libre sync persisted orders")
     except Exception as e:
         logger.error(f"MELI sync error: {e}")
         return api_error("Failed to sync Mercado Libre orders", 500)
 
-# Unified orders endpoint
+# Unified orders endpoint (canonical)
 @app.route('/api/orders', methods=['GET'])
 @jwt_required
 def list_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MLOrder
+        from models import CanonOrder
 
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 50, type=int), 100)
         status = request.args.get('status')
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
+        channel = request.args.get('channel')
 
-        query = MLOrder.query.filter_by(user_id=current_user_id)
+        query = CanonOrder.query.filter_by(user_id=current_user_id)
+        if channel:
+            query = query.filter(CanonOrder.channel == channel)
         if status:
-            query = query.filter(MLOrder.status == status)
+            query = query.filter(CanonOrder.status == status)
         if date_from:
-            query = query.filter(MLOrder.date_created >= date_from)
+            query = query.filter(CanonOrder.created_at >= date_from)
         if date_to:
-            query = query.filter(MLOrder.date_created <= date_to)
+            query = query.filter(CanonOrder.created_at <= date_to)
 
-        orders = query.order_by(MLOrder.date_created.desc()).paginate(page=page, per_page=per_page, error_out=False)
-        data = [o.to_dict(include_items=False) for o in orders.items]
+        orders = query.order_by(CanonOrder.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        data = [o.to_ui_dict(include_items=False) for o in orders.items]
         return api_response({
             "orders": data,
             "pagination": {"page": page, "per_page": per_page, "total": orders.total, "pages": orders.pages}
@@ -723,6 +752,81 @@ def list_orders():
         logger.error(f"List orders error: {e}")
         return api_error("Failed to list orders", 500)
 
+@app.route('/api/orders/export.csv', methods=['GET'])
+@jwt_required
+def export_orders_csv():
+    try:
+        import csv
+        from io import StringIO
+        current_user_id = get_jwt_identity()
+        from models import CanonOrder
+        status = request.args.get('status')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        channel = request.args.get('channel')
+
+        query = CanonOrder.query.filter_by(user_id=current_user_id)
+        if channel:
+            query = query.filter(CanonOrder.channel == channel)
+        if status:
+            query = query.filter(CanonOrder.status == status)
+        if date_from:
+            query = query.filter(CanonOrder.created_at >= date_from)
+        if date_to:
+            query = query.filter(CanonOrder.created_at <= date_to)
+        rows = query.order_by(CanonOrder.created_at.desc()).all()
+
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["order_id","channel","created_at","status","currency","gross_amount","buyer"])
+        for o in rows:
+            writer.writerow([o.external_id,o.channel,o.created_at,o.status,o.currency_id,o.gross_amount,o.buyer_name])
+        buf.seek(0)
+        return app.response_class(buf.getvalue(), mimetype='text/csv')
+    except Exception as e:
+        logger.error(f"Export CSV error: {e}")
+        return api_error("Failed to export", 500)
+
+@app.route('/admin/seed', methods=['POST'])
+@jwt_required
+def admin_seed():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import CanonOrder, CanonOrderItem
+        data = request.get_json(silent=True) or {}
+        count = int(data.get('count', 20))
+        import random
+        from datetime import datetime, timedelta
+        for i in range(count):
+            ext = f"SEED-{datetime.utcnow().strftime('%Y%m%d')}-{i:04d}"
+            co = CanonOrder(
+                user_id=current_user_id,
+                channel='meli',
+                external_id=ext,
+                created_at=(datetime.utcnow() - timedelta(days=random.randint(0,30))).isoformat(),
+                status=random.choice(['paid','cancelled','shipped']),
+                currency_id='CLP',
+                gross_amount=round(random.uniform(5000, 50000), 2),
+                net_amount=None,
+                buyer_name=random.choice(['Juan','Ana','Pedro','Carla']),
+            )
+            db.session.add(co)
+            db.session.flush()
+            for _ in range(random.randint(1,3)):
+                it = CanonOrderItem(
+                    order_id=co.id,
+                    sku=None,
+                    title=random.choice(['Producto A','Producto B','Producto C']),
+                    quantity=random.randint(1,3),
+                    unit_price=round(co.gross_amount / random.randint(1,3), 2)
+                )
+                db.session.add(it)
+        db.session.commit()
+        return api_response({"seeded": count}, "Seed created")
+    except Exception as e:
+        logger.error(f"Seed error: {e}")
+        db.session.rollback()
+        return api_error("Failed to seed", 500)
 # Credentials endpoints (BYO)
 @app.route('/integrations/meli/credentials', methods=['GET'])
 @jwt_required

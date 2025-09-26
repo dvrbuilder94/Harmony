@@ -909,6 +909,53 @@ def delete_meli_account():
         db.session.rollback()
         return api_error("Failed to delete account", 500)
 
+# Falabella credentials endpoints (BYO)
+@app.route('/integrations/falabella/credentials', methods=['GET'])
+@jwt_required
+def get_falabella_creds():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import FalabellaCredentials
+        creds = FalabellaCredentials.query.filter_by(user_id=current_user_id).first()
+        if not creds:
+            return api_response({"credentials": None}, "No credentials configured")
+        return api_response({"credentials": creds.to_safe_dict()}, "Credentials loaded")
+    except Exception as e:
+        logger.error(f"Get falabella creds error: {e}")
+        return api_error("Failed to get Falabella credentials", 500)
+
+@app.route('/integrations/falabella/credentials', methods=['POST'])
+@jwt_required
+def upsert_falabella_creds():
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.get_json() or {}
+        client_id = data.get('client_id')
+        client_secret = data.get('client_secret')
+        api_base_url = data.get('api_base_url')
+        if not client_id or not client_secret:
+            return api_error("client_id and client_secret are required", 400)
+        from models import FalabellaCredentials
+        creds = FalabellaCredentials.query.filter_by(user_id=current_user_id).first()
+        if not creds:
+            creds = FalabellaCredentials(
+                user_id=current_user_id,
+                client_id=client_id,
+                api_base_url=api_base_url,
+                client_secret_encrypted="",
+            )
+            db.session.add(creds)
+        else:
+            creds.client_id = client_id
+            creds.api_base_url = api_base_url
+        creds.set_client_secret(client_secret)
+        db.session.commit()
+        return api_response({"credentials": creds.to_safe_dict()}, "Falabella credentials saved")
+    except Exception as e:
+        logger.error(f"Upsert falabella creds error: {e}")
+        db.session.rollback()
+        return api_error("Failed to save Falabella credentials", 500)
+
 # Webhook endpoint for Mercado Libre notifications (validation-friendly)
 @app.route('/webhooks/meli', methods=['GET', 'POST'])
 @app.route('/webhooks/meli/', methods=['GET', 'POST'])

@@ -334,3 +334,45 @@ class CanonOrderItem(db.Model):
             'quantity': self.quantity,
             'unit_price': self.unit_price,
         }
+
+
+class FalabellaCredentials(db.Model):
+    __tablename__ = 'falabella_credentials'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False, unique=True)
+    client_id = db.Column(db.String(128), nullable=False)
+    client_secret_encrypted = db.Column(db.Text, nullable=False)
+    api_base_url = db.Column(db.String(500), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('falabella_credentials', uselist=False))
+
+    @staticmethod
+    def _fernet() -> Fernet:
+        key = os.environ.get('ENCRYPTION_KEY')
+        if not key:
+            raise RuntimeError('ENCRYPTION_KEY is required for credentials encryption')
+        if isinstance(key, str):
+            key = key.encode()
+        return Fernet(key)
+
+    def set_client_secret(self, client_secret: str):
+        f = self._fernet()
+        self.client_secret_encrypted = f.encrypt(client_secret.encode()).decode()
+
+    def get_client_secret(self) -> str:
+        f = self._fernet()
+        return f.decrypt(self.client_secret_encrypted.encode()).decode()
+
+    def to_safe_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'client_id': self.client_id,
+            'api_base_url': self.api_base_url,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }

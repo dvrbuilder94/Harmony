@@ -376,3 +376,73 @@ class FalabellaCredentials(db.Model):
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }
+
+
+# Financial canonical models
+class CanonPayment(db.Model):
+    __tablename__ = 'payments_canonical'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String, db.ForeignKey('orders_canonical.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    method = db.Column(db.String(64), nullable=True)
+    status = db.Column(db.String(32), nullable=True)
+    paid_at = db.Column(db.String(64), nullable=True)
+    external_id = db.Column(db.String(128), nullable=True)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CanonFee(db.Model):
+    __tablename__ = 'fees_canonical'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String, db.ForeignKey('orders_canonical.id'), nullable=False)
+    kind = db.Column(db.String(64), nullable=True)
+    amount = db.Column(db.Float, nullable=False, default=0)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CanonPayout(db.Model):
+    __tablename__ = 'payouts_canonical'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id = db.Column(db.String, db.ForeignKey('orders_canonical.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    paid_out_at = db.Column(db.String(64), nullable=True)
+    external_id = db.Column(db.String(128), nullable=True)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BankTransaction(db.Model):
+    __tablename__ = 'bank_transactions'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.String, db.ForeignKey('users.id'), nullable=False)
+    account_id = db.Column(db.String(64), nullable=True)
+    date = db.Column(db.String(64), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    description = db.Column(db.String(512), nullable=True)
+    external_id = db.Column(db.String(128), nullable=True)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Conciliation(db.Model):
+    __tablename__ = 'conciliations'
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    payout_id = db.Column(db.String, db.ForeignKey('payouts_canonical.id'), nullable=False)
+    bank_transaction_id = db.Column(db.String, db.ForeignKey('bank_transactions.id'), nullable=False)
+    status = db.Column(db.String(32), nullable=False, default='conciliated')  # conciliated|manual|pending
+    match_type = db.Column(db.String(32), nullable=True)  # exact|tolerated|manual
+    diff_amount = db.Column(db.Float, nullable=True)
+
+    created_row_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_row_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

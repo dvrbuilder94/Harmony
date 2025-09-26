@@ -603,7 +603,7 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
+from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:
@@ -646,14 +646,30 @@ def meli_sync_orders():
 
         headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
-        # Get recent orders (last 7 days) - simplified
-        created_from = (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        orders_url = f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}&order.date_created.from={created_from}"
-        res = requests.get(orders_url, headers=headers, timeout=30)
-        if res.status_code != 200:
-            return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
-        data = res.json()
-        results = data.get('results', [])
+        # Get recent orders (last 90 days) with simple pagination
+        created_from = (datetime.utcnow() - timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        results = []
+        limit = 50
+        offset = 0
+        max_pages = 20  # safety guard
+        pages = 0
+        while pages < max_pages:
+            orders_url = (
+                f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}"
+                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}"
+            )
+            res = requests.get(orders_url, headers=headers, timeout=30)
+            if res.status_code != 200:
+                return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
+            data = res.json()
+            batch = data.get('results', [])
+            if not batch:
+                break
+            results.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
+            pages += 1
 
         saved = 0
         for order in results:
@@ -685,7 +701,7 @@ def meli_sync_orders():
 
             saved += 1
 
-            # Map to canonical order
+            # Map to canonical order + payout (MVP payout = gross_amount)
             canon_exists = CanonOrder.query.filter_by(user_id=current_user_id, channel='meli', external_id=oid).first()
             if not canon_exists:
                 canon = CanonOrder(
@@ -710,6 +726,15 @@ def meli_sync_orders():
                         unit_price=float(it.get('unit_price') or 0)
                     )
                     db.session.add(ci)
+                # Create a payout record (mocked as gross for MVP)
+                from models import CanonPayout
+                po = CanonPayout(
+                    order_id=canon.id,
+                    amount=canon.gross_amount,
+                    paid_out_at=None,
+                    external_id=None,
+                )
+                db.session.add(po)
 
         db.session.commit()
         return api_response({"saved": saved, "fetched": len(results)}, "Mercado Libre sync persisted orders")
@@ -827,6 +852,156 @@ def admin_seed():
         logger.error(f"Seed error: {e}")
         db.session.rollback()
         return api_error("Failed to seed", 500)
+
+# Bank mock endpoints
+@app.route('/admin/seed/bank', methods=['POST'])
+@jwt_required
+def seed_bank():
+    try:
+        from models import BankTransaction
+        current_user_id = get_jwt_identity()
+        data = request.get_json(silent=True) or {}
+        count = int(data.get('count', 10))
+        import random
+        from datetime import datetime, timedelta
+        for i in range(count):
+            tx = BankTransaction(
+                user_id=current_user_id,
+                account_id='ACC-TEST',
+                date=(datetime.utcnow() - timedelta(days=random.randint(0,30))).isoformat(),
+                amount=round(random.uniform(5000, 50000), 2) * random.choice([1,1,1,-1]),
+                description=random.choice(['Abono Mercado Libre','Transferencia','Pago proveedor','Ajuste']),
+                external_id=None,
+            )
+            db.session.add(tx)
+        db.session.commit()
+        return api_response({"seeded": count}, "Bank transactions seeded")
+    except Exception as e:
+        logger.error(f"Seed bank error: {e}")
+        db.session.rollback()
+        return api_error("Failed to seed bank", 500)
+
+@app.route('/api/bank/transactions', methods=['GET'])
+@jwt_required
+def list_bank_transactions():
+    try:
+        from models import BankTransaction
+        current_user_id = get_jwt_identity()
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        query = BankTransaction.query.filter_by(user_id=current_user_id)
+        if date_from:
+            query = query.filter(BankTransaction.date >= date_from)
+        if date_to:
+            query = query.filter(BankTransaction.date <= date_to)
+        rows = query.order_by(BankTransaction.date.desc()).all()
+        data = [
+            {
+                'id': r.id,
+                'date': r.date,
+                'amount': r.amount,
+                'description': r.description,
+                'external_id': r.external_id,
+            } for r in rows
+        ]
+        return api_response({"transactions": data, "total": len(data)}, "Bank transactions")
+    except Exception as e:
+        logger.error(f"List bank error: {e}")
+        return api_error("Failed to list bank", 500)
+
+# Conciliation auto (exact amount, date ±2 days)
+@app.route('/api/conciliation/auto', methods=['POST'])
+@jwt_required
+def conciliation_auto():
+    try:
+        from models import CanonPayout, BankTransaction, Conciliation
+        from datetime import datetime, timedelta
+        current_user_id = get_jwt_identity()
+        # Load all payouts (for simplicity)
+        payouts = db.session.execute(
+            select(CanonPayout.id, CanonPayout.amount, CanonPayout.paid_out_at).select_from(CanonPayout)
+        ).all()
+        txs = db.session.execute(
+            select(BankTransaction.id, BankTransaction.amount, BankTransaction.date).select_from(BankTransaction).where(BankTransaction.user_id == current_user_id)
+        ).all()
+        created = 0
+        for pid, pamount, pdate in payouts:
+            # parse dates
+            dtp = None
+            try:
+                if pdate:
+                    dtp = datetime.fromisoformat(pdate.replace('Z','+00:00'))
+            except Exception:
+                dtp = None
+            for tid, tamount, tdate in txs:
+                if abs((tamount or 0) - (pamount or 0)) < 0.01:
+                    # date tolerance
+                    ok_date = True
+                    if dtp:
+                        try:
+                            dtt = datetime.fromisoformat(tdate.replace('Z','+00:00'))
+                            ok_date = abs((dtt - dtp).days) <= 2
+                        except Exception:
+                            ok_date = True
+                    exists = Conciliation.query.filter_by(payout_id=pid, bank_transaction_id=tid).first()
+                    if not exists and ok_date:
+                        c = Conciliation(
+                            payout_id=pid,
+                            bank_transaction_id=tid,
+                            status='conciliated',
+                            match_type='exact',
+                            diff_amount=0,
+                        )
+                        db.session.add(c)
+                        created += 1
+                        break
+        db.session.commit()
+        return api_response({"created": created}, "Auto conciliation done")
+    except Exception as e:
+        logger.error(f"Conciliation auto error: {e}")
+        db.session.rollback()
+        return api_error("Failed to run auto conciliation", 500)
+
+@app.route('/api/conciliation/manual', methods=['POST'])
+@jwt_required
+def conciliation_manual():
+    try:
+        from models import Conciliation
+        data = request.get_json() or {}
+        payout_id = data.get('payout_id')
+        bank_tx_id = data.get('bank_transaction_id')
+        if not payout_id or not bank_tx_id:
+            return api_error("payout_id and bank_transaction_id are required", 400)
+        exists = Conciliation.query.filter_by(payout_id=payout_id, bank_transaction_id=bank_tx_id).first()
+        if exists:
+            return api_response({}, "Already conciliated")
+        c = Conciliation(
+            payout_id=payout_id,
+            bank_transaction_id=bank_tx_id,
+            status='manual',
+            match_type='manual',
+            diff_amount=None,
+        )
+        db.session.add(c)
+        db.session.commit()
+        return api_response({}, "Manual conciliation saved")
+    except Exception as e:
+        logger.error(f"Conciliation manual error: {e}")
+        db.session.rollback()
+        return api_error("Failed to save manual conciliation", 500)
+
+@app.route('/api/conciliation/kpis', methods=['GET'])
+@jwt_required
+def conciliation_kpis():
+    try:
+        from models import Conciliation, CanonPayout
+        total_payouts = db.session.execute(select(db.func.count(CanonPayout.id))).scalar() or 0
+        total_conc = db.session.execute(select(db.func.count(Conciliation.id))).scalar() or 0
+        pct = (total_conc / total_payouts * 100) if total_payouts else 0
+        return api_response({"total_payouts": total_payouts, "conciliations": total_conc, "percent": round(pct,2)}, "KPIs")
+    except Exception as e:
+        logger.error(f"KPIs error: {e}")
+        return api_error("Failed to load KPIs", 500)
 # Credentials endpoints (BYO)
 @app.route('/integrations/meli/credentials', methods=['GET'])
 @jwt_required

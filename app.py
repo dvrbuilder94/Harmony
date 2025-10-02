@@ -601,188 +601,184 @@ def create_sale():
 @app.route('/api/meli/sync', methods=['POST'])
 @jwt_required
 def meli_sync_orders():
+    current_user_id = get_jwt_identity()
+    # Read optional params (query or JSON body)
+    body = request.get_json(silent=True) or {}
     try:
-        current_user_id = get_jwt_identity()
-        # Read optional params (query or JSON body)
-        body = request.get_json(silent=True) or {}
-        try:
-            days_back = int(request.args.get('days_back', body.get('days_back', 90)))
-        except Exception:
-            days_back = 90
-        # Clamp days_back to a safe range
-        days_back = max(1, min(days_back, 3650))
-        # Debug flag
-        debug_param = request.args.get('debug', body.get('debug'))
-        debug_mode = False
-        if isinstance(debug_param, str):
-            debug_mode = debug_param.lower() in ("1", "true", "yes")
-        elif isinstance(debug_param, bool):
-            debug_mode = debug_param
-        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
+        days_back = int(request.args.get('days_back', body.get('days_back', 90)))
+    except Exception:
+        days_back = 90
+    # Clamp days_back to a safe range
+    days_back = max(1, min(days_back, 3650))
+    # Debug flag
+    debug_param = request.args.get('debug', body.get('debug'))
+    debug_mode = False
+    if isinstance(debug_param, str):
+        debug_mode = debug_param.lower() in ("1", "true", "yes")
+    elif isinstance(debug_param, bool):
+        debug_mode = debug_param
+    from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
-        account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
-        if not account:
-            return api_error("No Mercado Libre account linked", 400)
+    account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+    if not account:
+        return api_error("No Mercado Libre account linked", 400)
 
-        # Refresh token if expired and we have refresh_token
-        if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
-            if account.refresh_token:
-                creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
-                if not creds:
-                    return api_error("Mercado Libre credentials not configured for this user", 400)
-                client_id = creds.client_id
-                client_secret = creds.get_client_secret()
-                if not client_id or not client_secret:
-                    return api_error("MELI env vars missing for refresh", 500)
-                refresh_res = requests.post(
-                    "https://api.mercadolibre.com/oauth/token",
-                    data={
-                        "grant_type": "refresh_token",
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "refresh_token": account.get_refresh_token(),
-                    },
-                    headers={
-                        "Accept": "application/json",
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                    timeout=20,
-                )
-                if refresh_res.status_code == 200:
-                    t = refresh_res.json()
-                    exp_in = t.get('expires_in')
-                    new_expires = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
-                    account.set_tokens(t['access_token'], t.get('refresh_token', account.get_refresh_token()), new_expires)
-                    db.session.commit()
-                else:
-                    return api_error("Failed to refresh Mercado Libre token", 401, details=refresh_res.text)
-            else:
-                return api_error("Token expired and no refresh token available", 401)
-
-        headers = {"Authorization": f"Bearer {account.get_access_token()}"}
-
-        # Ensure we have a seller id (meli_user_id). Try to fetch if missing
-        if not getattr(account, 'meli_user_id', None):
-            me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
-            if me_res.status_code == 200:
-                try:
-                    account.meli_user_id = str(me_res.json().get('id'))
-                    db.session.commit()
-                except Exception:
-                    return api_error("Failed to determine Mercado Libre seller id", 500)
-            else:
-                return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
-
-        # Get recent orders window (configurable)
-        created_from = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        results = []
-        limit = 50
-        offset = 0
-        max_pages = 20  # safety guard
-        pages = 0
-        debug_pages = []
-        debug_urls = []
-        while pages < max_pages:
-            orders_url = (
-                f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
-                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
+    # Refresh token if expired and we have refresh_token
+    if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
+        if account.refresh_token:
+            creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+            if not creds:
+                return api_error("Mercado Libre credentials not configured for this user", 400)
+            client_id = creds.client_id
+            client_secret = creds.get_client_secret()
+            if not client_id or not client_secret:
+                return api_error("MELI env vars missing for refresh", 500)
+            refresh_res = requests.post(
+                "https://api.mercadolibre.com/oauth/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": account.get_refresh_token(),
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                timeout=20,
             )
-            res = requests.get(orders_url, headers=headers, timeout=30)
-            if res.status_code != 200:
-                return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
-            data = res.json()
-            batch = data.get('results', [])
-            if debug_mode:
-                debug_pages.append(len(batch))
-                # Return at most a few URLs to avoid noisy payloads
-                if len(debug_urls) < 5:
-                    debug_urls.append(orders_url)
-            if not batch:
-                break
-            results.extend(batch)
-            if len(batch) < limit:
-                break
-            offset += limit
-            pages += 1
+            if refresh_res.status_code == 200:
+                t = refresh_res.json()
+                exp_in = t.get('expires_in')
+                new_expires = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
+                account.set_tokens(t['access_token'], t.get('refresh_token', account.get_refresh_token()), new_expires)
+                db.session.commit()
+            else:
+                return api_error("Failed to refresh Mercado Libre token", 401, details=refresh_res.text)
+        else:
+            return api_error("Token expired and no refresh token available", 401)
 
-        saved = 0
-        for order in results:
-            oid = str(order.get('id'))
-            existing = MLOrder.query.filter_by(user_id=current_user_id, order_id=oid).first()
-            if existing:
-                continue
+    headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
-            ml_order = MLOrder(
+    # Ensure we have a seller id (meli_user_id). Try to fetch if missing
+    if not getattr(account, 'meli_user_id', None):
+        me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
+        if me_res.status_code == 200:
+            try:
+                account.meli_user_id = str(me_res.json().get('id'))
+                db.session.commit()
+            except Exception:
+                return api_error("Failed to determine Mercado Libre seller id", 500)
+        else:
+            return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
+
+    # Get recent orders window (configurable)
+    created_from = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    results = []
+    limit = 50
+    offset = 0
+    max_pages = 20  # safety guard
+    pages = 0
+    debug_pages = []
+    debug_urls = []
+    while pages < max_pages:
+        orders_url = (
+            f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
+            f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
+        )
+        res = requests.get(orders_url, headers=headers, timeout=30)
+        if res.status_code != 200:
+            return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
+        data = res.json()
+        batch = data.get('results', [])
+        if debug_mode:
+            debug_pages.append(len(batch))
+            # Return at most a few URLs to avoid noisy payloads
+            if len(debug_urls) < 5:
+                debug_urls.append(orders_url)
+        if not batch:
+            break
+        results.extend(batch)
+        if len(batch) < limit:
+            break
+        offset += limit
+        pages += 1
+
+    saved = 0
+    for order in results:
+        oid = str(order.get('id'))
+        existing = MLOrder.query.filter_by(user_id=current_user_id, order_id=oid).first()
+        if existing:
+            continue
+
+        ml_order = MLOrder(
+            user_id=current_user_id,
+            order_id=oid,
+            date_created=order.get('date_created'),
+            currency_id=order.get('currency_id'),
+            total_amount=float(order.get('total_amount') or 0),
+            status=order.get('status'),
+            buyer_nickname=(order.get('buyer') or {}).get('nickname')
+        )
+        db.session.add(ml_order)
+        db.session.flush()
+
+        for it in (order.get('order_items') or []):
+            item = MLOrderItem(
+                ml_order_id=ml_order.id,
+                title=(it.get('item') or {}).get('title'),
+                quantity=it.get('quantity'),
+                unit_price=float(it.get('unit_price') or 0)
+            )
+            db.session.add(item)
+
+        saved += 1
+
+        # Map to canonical order + payout (MVP payout = gross_amount)
+        canon_exists = CanonOrder.query.filter_by(user_id=current_user_id, channel='meli', external_id=oid).first()
+        if not canon_exists:
+            canon = CanonOrder(
                 user_id=current_user_id,
-                order_id=oid,
-                date_created=order.get('date_created'),
-                currency_id=order.get('currency_id'),
-                total_amount=float(order.get('total_amount') or 0),
+                channel='meli',
+                external_id=oid,
+                created_at=order.get('date_created'),
                 status=order.get('status'),
-                buyer_nickname=(order.get('buyer') or {}).get('nickname')
+                currency_id=order.get('currency_id'),
+                gross_amount=float(order.get('total_amount') or 0),
+                net_amount=None,
+                buyer_name=(order.get('buyer') or {}).get('nickname'),
             )
-            db.session.add(ml_order)
+            db.session.add(canon)
             db.session.flush()
-
             for it in (order.get('order_items') or []):
-                item = MLOrderItem(
-                    ml_order_id=ml_order.id,
+                ci = CanonOrderItem(
+                    order_id=canon.id,
+                    sku=None,
                     title=(it.get('item') or {}).get('title'),
-                    quantity=it.get('quantity'),
+                    quantity=it.get('quantity') or 1,
                     unit_price=float(it.get('unit_price') or 0)
                 )
-                db.session.add(item)
+                db.session.add(ci)
+            # Create a payout record (mocked as gross for MVP)
+            from models import CanonPayout
+            po = CanonPayout(
+                order_id=canon.id,
+                amount=canon.gross_amount,
+                paid_out_at=None,
+                external_id=None,
+            )
+            db.session.add(po)
 
-            saved += 1
-
-            # Map to canonical order + payout (MVP payout = gross_amount)
-            canon_exists = CanonOrder.query.filter_by(user_id=current_user_id, channel='meli', external_id=oid).first()
-            if not canon_exists:
-                canon = CanonOrder(
-                    user_id=current_user_id,
-                    channel='meli',
-                    external_id=oid,
-                    created_at=order.get('date_created'),
-                    status=order.get('status'),
-                    currency_id=order.get('currency_id'),
-                    gross_amount=float(order.get('total_amount') or 0),
-                    net_amount=None,
-                    buyer_name=(order.get('buyer') or {}).get('nickname'),
-                )
-                db.session.add(canon)
-                db.session.flush()
-                for it in (order.get('order_items') or []):
-                    ci = CanonOrderItem(
-                        order_id=canon.id,
-                        sku=None,
-                        title=(it.get('item') or {}).get('title'),
-                        quantity=it.get('quantity') or 1,
-                        unit_price=float(it.get('unit_price') or 0)
-                    )
-                    db.session.add(ci)
-                # Create a payout record (mocked as gross for MVP)
-                from models import CanonPayout
-                po = CanonPayout(
-                    order_id=canon.id,
-                    amount=canon.gross_amount,
-                    paid_out_at=None,
-                    external_id=None,
-                )
-                db.session.add(po)
-
-        db.session.commit()
-        response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back}
-        if debug_mode:
-            response_payload["debug"] = {
-                "seller": account.meli_user_id,
-                "created_from": created_from,
-                "pages": debug_pages,
-                "urls": debug_urls,
-            }
-        return api_response(response_payload, "Mercado Libre sync persisted orders")
-    except Exception as e:
-        logger.error(f"MELI sync error: {e}")
-        return api_error("Failed to sync Mercado Libre orders", 500)
+    db.session.commit()
+    response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back}
+    if debug_mode:
+        response_payload["debug"] = {
+            "seller": account.meli_user_id,
+            "created_from": created_from,
+            "pages": debug_pages,
+            "urls": debug_urls,
+        }
+    return api_response(response_payload, "Mercado Libre sync persisted orders")
 
 # Unified orders endpoint (canonical)
 @app.route('/api/orders', methods=['GET'])

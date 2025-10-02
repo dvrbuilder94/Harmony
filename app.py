@@ -675,8 +675,8 @@ def meli_sync_orders():
         pages = 0
         while pages < max_pages:
             orders_url = (
-                f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}"
-                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}"
+                f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
+                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
             )
             res = requests.get(orders_url, headers=headers, timeout=30)
             if res.status_code != 200:

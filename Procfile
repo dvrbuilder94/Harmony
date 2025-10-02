@@ -1,1 +1,1 @@
-web: gunicorn -b 0.0.0.0:5000 app:app
+web: python -m py_compile app.py models.py adapters.py && gunicorn -b 0.0.0.0:5000 app:app

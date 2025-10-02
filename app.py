@@ -617,6 +617,11 @@ def meli_sync_orders():
         debug_mode = debug_param.lower() in ("1", "true", "yes")
     elif isinstance(debug_param, bool):
         debug_mode = debug_param
+    # Optional mode param to force recent endpoint
+    mode_param = request.args.get('mode', body.get('mode'))
+    use_recent = False
+    if isinstance(mode_param, str):
+        use_recent = mode_param.lower() == 'recent'
     from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
     account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
@@ -682,10 +687,16 @@ def meli_sync_orders():
     debug_pages = []
     debug_urls = []
     while pages < max_pages:
-        orders_url = (
-            f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
-            f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
-        )
+        if use_recent:
+            orders_url = (
+                f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}"
+                f"&limit={limit}&offset={offset}"
+            )
+        else:
+            orders_url = (
+                f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
+                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
+            )
         res = requests.get(orders_url, headers=headers, timeout=30)
         if res.status_code != 200:
             return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
@@ -697,6 +708,11 @@ def meli_sync_orders():
             if len(debug_urls) < 5:
                 debug_urls.append(orders_url)
         if not batch:
+            # Fallback to recent endpoint if initial search yields no results
+            if pages == 0 and not use_recent:
+                use_recent = True
+                # try again with recent on the same offset without increasing pages
+                continue
             break
         results.extend(batch)
         if len(batch) < limit:
@@ -777,6 +793,7 @@ def meli_sync_orders():
             "created_from": created_from,
             "pages": debug_pages,
             "urls": debug_urls,
+            "mode": "recent" if use_recent else "search",
         }
     return api_response(response_payload, "Mercado Libre sync persisted orders")
 
@@ -1219,11 +1236,19 @@ def meli_preview_orders():
             else:
                 return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
 
+        mode = request.args.get('mode')
+        use_recent = isinstance(mode, str) and mode.lower() == 'recent'
         created_from = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        orders_url = (
-            f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
-            f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
-        )
+        if use_recent:
+            orders_url = (
+                f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}"
+                f"&limit={limit}&offset={offset}"
+            )
+        else:
+            orders_url = (
+                f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
+                f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
+            )
         res = requests.get(orders_url, headers=headers, timeout=30)
         if res.status_code != 200:
             return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
@@ -1241,6 +1266,7 @@ def meli_preview_orders():
             "sample_ids": sample_ids,
             "results": results,
             "url": orders_url,
+            "mode": "recent" if use_recent else "search",
         }, "Mercado Libre preview")
     except Exception as e:
         logger.error(f"MELI preview error: {e}")

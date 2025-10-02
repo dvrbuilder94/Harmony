@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import requests
 
 
@@ -14,7 +14,7 @@ class MarketplaceAdapter(ABC):
 
 
 class MercadoLibreAdapter(MarketplaceAdapter):
-    def __init__(self, access_token: str, meli_user_id: str | None):
+    def __init__(self, access_token: str, meli_user_id: Optional[str]):
         self.access_token = access_token
         self.meli_user_id = meli_user_id
 
@@ -33,7 +33,7 @@ class MercadoLibreAdapter(MarketplaceAdapter):
 
 
 class FalabellaAdapter(MarketplaceAdapter):
-    def __init__(self, access_token: str | None = None):
+    def __init__(self, access_token: Optional[str] = None):
         self.access_token = access_token
 
     def get_orders(self, **kwargs) -> List[Dict[str, Any]]:

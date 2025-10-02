@@ -603,6 +603,14 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
+        # Read optional params (query or JSON body)
+        body = request.get_json(silent=True) or {}
+        try:
+            days_back = int(request.args.get('days_back', body.get('days_back', 90)))
+        except Exception:
+            days_back = 90
+        # Clamp days_back to a safe range
+        days_back = max(1, min(days_back, 3650))
         from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
@@ -646,8 +654,20 @@ def meli_sync_orders():
 
         headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
-        # Get recent orders (last 90 days) with simple pagination
-        created_from = (datetime.utcnow() - timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        # Ensure we have a seller id (meli_user_id). Try to fetch if missing
+        if not getattr(account, 'meli_user_id', None):
+            me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
+            if me_res.status_code == 200:
+                try:
+                    account.meli_user_id = str(me_res.json().get('id'))
+                    db.session.commit()
+                except Exception:
+                    return api_error("Failed to determine Mercado Libre seller id", 500)
+            else:
+                return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
+
+        # Get recent orders window (configurable)
+        created_from = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
         results = []
         limit = 50
         offset = 0
@@ -737,7 +757,7 @@ def meli_sync_orders():
                 db.session.add(po)
 
         db.session.commit()
-        return api_response({"saved": saved, "fetched": len(results)}, "Mercado Libre sync persisted orders")
+        return api_response({"saved": saved, "fetched": len(results), "window_days": days_back}, "Mercado Libre sync persisted orders")
     except Exception as e:
         logger.error(f"MELI sync error: {e}")
         return api_error("Failed to sync Mercado Libre orders", 500)

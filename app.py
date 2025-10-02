@@ -603,7 +603,7 @@ def create_sale():
 def meli_sync_orders():
     try:
         current_user_id = get_jwt_identity()
-from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
+        from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
         account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
         if not account:

@@ -37,14 +37,18 @@ export async function getMeliAuthUrl(): Promise<string> {
   return json.data.auth_url
 }
 
-export async function syncMeli(): Promise<any> {
+export async function syncMeli(params?: { days_back?: number; mode?: 'recent' | 'search'; debug?: boolean }): Promise<any> {
   if ((import.meta as any).env?.VITE_MOCK === 'true') {
     return { data: { orders: [
       { order_id: 'MOCK-1', total_amount: 10000, status: 'paid', date_created: new Date().toISOString(), items: [{ title: 'Producto demo', quantity: 1, unit_price: 10000 }] },
       { order_id: 'MOCK-2', total_amount: 25000, status: 'paid', date_created: new Date().toISOString(), items: [{ title: 'Otro demo', quantity: 2, unit_price: 12500 }] }
     ] } }
   }
-  const res = await fetch(`${getApiBase()}/api/meli/sync`, {
+  const qs = new URLSearchParams()
+  if (params?.days_back) qs.set('days_back', String(params.days_back))
+  if (params?.mode) qs.set('mode', params.mode)
+  if (params?.debug) qs.set('debug', 'true')
+  const res = await fetch(`${getApiBase()}/api/meli/sync${qs.toString() ? `?${qs.toString()}` : ''}`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getToken()}` }
   })

@@ -686,6 +686,7 @@ def meli_sync_orders():
     pages = 0
     debug_pages = []
     debug_urls = []
+    logger.info(f"MELI sync start user={current_user_id} seller={account.meli_user_id} days_back={days_back} mode={'recent' if use_recent else 'search'}")
     while pages < max_pages:
         if use_recent:
             orders_url = (
@@ -697,11 +698,14 @@ def meli_sync_orders():
                 f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
                 f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
             )
+        logger.debug(f"MELI sync request url={orders_url}")
         res = requests.get(orders_url, headers=headers, timeout=30)
         if res.status_code != 200:
+            logger.error(f"MELI sync fetch failed status={res.status_code} body={res.text[:300]}")
             return api_error("Failed to fetch orders from Mercado Libre", 502, details=res.text)
         data = res.json()
         batch = data.get('results', [])
+        logger.debug(f"MELI sync batch size={len(batch)} page={pages} offset={offset}")
         if debug_mode:
             debug_pages.append(len(batch))
             # Return at most a few URLs to avoid noisy payloads
@@ -786,7 +790,7 @@ def meli_sync_orders():
             db.session.add(po)
 
     db.session.commit()
-    response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back}
+    response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back, "seller": account.meli_user_id, "mode": "recent" if use_recent else "search"}
     if debug_mode:
         response_payload["debug"] = {
             "seller": account.meli_user_id,

@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet
 import os
 
 from app import db
+from typing import Optional
 
 
 class User(db.Model):
@@ -150,7 +151,7 @@ class MercadoLibreAccount(db.Model):
             key = key.encode()
         return Fernet(key)
 
-    def set_tokens(self, access_token: str, refresh_token: str | None, expires_at):
+    def set_tokens(self, access_token: str, refresh_token: Optional[str], expires_at):
         f = self._get_fernet()
         self.access_token = f.encrypt(access_token.encode()).decode()
         self.refresh_token = f.encrypt(refresh_token.encode()).decode() if refresh_token else None
@@ -160,7 +161,7 @@ class MercadoLibreAccount(db.Model):
         f = self._get_fernet()
         return f.decrypt(self.access_token.encode()).decode()
 
-    def get_refresh_token(self) -> str | None:
+    def get_refresh_token(self) -> Optional[str]:
         if not self.refresh_token:
             return None
         f = self._get_fernet()

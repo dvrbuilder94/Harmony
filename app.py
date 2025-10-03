@@ -1272,6 +1272,118 @@ def meli_preview_orders():
         logger.error(f"MELI preview error: {e}")
         return api_error("Failed to preview Mercado Libre orders", 500)
 
+# Debug endpoint to inspect Mercado Libre connectivity and sample orders
+@app.route('/integrations/meli/debug', methods=['GET'])
+@jwt_required
+def meli_debug():
+    try:
+        current_user_id = get_jwt_identity()
+        from models import MercadoLibreAccount, MercadoLibreCredentials
+
+        account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+        if not account:
+            return api_error("No Mercado Libre account linked", 400)
+
+        # Attempt refresh if expired
+        if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
+            if account.refresh_token:
+                creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+                if not creds:
+                    return api_error("Mercado Libre credentials not configured for this user", 400)
+                client_id = creds.client_id
+                client_secret = creds.get_client_secret()
+                refresh_res = requests.post(
+                    "https://api.mercadolibre.com/oauth/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "refresh_token": account.get_refresh_token(),
+                    },
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    timeout=20,
+                )
+                if refresh_res.status_code == 200:
+                    t = refresh_res.json()
+                    exp_in = t.get('expires_in')
+                    new_expires = datetime.utcnow() + timedelta(seconds=exp_in) if exp_in else None
+                    account.set_tokens(t['access_token'], t.get('refresh_token', account.get_refresh_token()), new_expires)
+                    db.session.commit()
+                else:
+                    return api_error("Failed to refresh Mercado Libre token", 401, details=refresh_res.text)
+
+        headers = {"Authorization": f"Bearer {account.get_access_token()}"}
+
+        # ME endpoint
+        me_json = None
+        me_status = None
+        meli_user_id = account.meli_user_id
+        try:
+            me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
+            me_status = me_res.status_code
+            if me_res.status_code == 200:
+                me_json = me_res.json()
+                meli_user_id = str(me_json.get('id')) if me_json.get('id') else meli_user_id
+        except Exception as e:
+            logger.error(f"MELI debug ME error: {e}")
+
+        # Sample orders recent and search
+        created_from = (datetime.utcnow() - timedelta(days=int(request.args.get('days_back', 365)))).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        urls = {
+            "recent": f"https://api.mercadolibre.com/orders/search/recent?seller={meli_user_id}&limit=10",
+            "search": f"https://api.mercadolibre.com/orders/search?seller={meli_user_id}&order.date_created.from={created_from}&limit=10&sort=date_desc",
+        }
+        recent_count = None
+        search_count = None
+        recent_status = None
+        search_status = None
+        recent_sample = []
+        search_sample = []
+        recent_error = None
+        search_error = None
+        try:
+            r = requests.get(urls["recent"], headers=headers, timeout=30)
+            recent_status = r.status_code
+            if r.status_code == 200:
+                j = r.json()
+                rs = j.get('results', [])
+                recent_count = len(rs)
+                recent_sample = rs[:3]
+            else:
+                recent_error = r.text
+        except Exception as e:
+            recent_error = str(e)
+
+        try:
+            r = requests.get(urls["search"], headers=headers, timeout=30)
+            search_status = r.status_code
+            if r.status_code == 200:
+                j = r.json()
+                rs = j.get('results', [])
+                search_count = len(rs)
+                search_sample = rs[:3]
+            else:
+                search_error = r.text
+        except Exception as e:
+            search_error = str(e)
+
+        return api_response({
+            "account": {
+                "meli_user_id": meli_user_id,
+                "has_refresh_token": bool(account.refresh_token),
+                "token_expires_at": account.token_expires_at.isoformat() if account.token_expires_at else None,
+            },
+            "me": {"status": me_status, "json": me_json},
+            "recent": {"status": recent_status, "count": recent_count, "url": urls["recent"], "error": recent_error, "sample": recent_sample},
+            "search": {"status": search_status, "count": search_count, "url": urls["search"], "created_from": created_from, "error": search_error, "sample": search_sample},
+        }, "MELI debug info")
+    except Exception as e:
+        logger.error(f"MELI debug endpoint error: {e}")
+        return api_error("Failed to run MELI debug", 500)
+
 # Falabella credentials endpoints (BYO)
 @app.route('/integrations/falabella/credentials', methods=['GET'])
 @jwt_required

@@ -131,8 +131,9 @@ def get_database_url():
     # Default fallback
     return "sqlite:///salesharmony.db"
 
-# Configuration - enforce secure secret
-app.secret_key = os.environ.get("SESSION_SECRET")  # Follow dev guidelines exactly
+# Configuration - enforce secure secret (single source of truth)
+app.config["SECRET_KEY"] = JWT_SECRET_KEY
+app.secret_key = app.config["SECRET_KEY"]
 app.config["SQLALCHEMY_DATABASE_URI"] = get_database_url()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -154,7 +155,7 @@ else:
 
 # JWT Configuration (simple implementation)
 if JWT_AVAILABLE:
-    app.config["JWT_SECRET_KEY"] = app.config["SECRET_KEY"]
+    app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 
 # Initialize SQLAlchemy

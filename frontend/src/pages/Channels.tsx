@@ -30,6 +30,28 @@ export default function Channels() {
     }
   }
 
+  const openDebug = async () => {
+    const url = `${getApiBase()}/integrations/meli/debug?days_back=365`
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } })
+      const text = await res.text()
+      const w = window.open('', '_blank')
+      if (w) {
+        w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>MELI Debug</title></head><body><pre style="white-space: pre-wrap; word-wrap: break-word;">${
+          text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        }</pre></body></html>`)
+        w.document.close()
+      } else {
+        alert('Bloqueado por el navegador. Revisa la consola para el contenido.')
+        // Fallback logging
+        // eslint-disable-next-line no-console
+        console.log('MELI debug response:', text)
+      }
+    } catch (e) {
+      alert('No se pudo abrir el debug')
+    }
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">Canales</h1>
@@ -41,12 +63,11 @@ export default function Channels() {
         <div className="flex gap-2">
           <button className="bg-indigo-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={connectMeli} disabled={!getToken() || !creds}>Conectar</button>
           <button className="bg-emerald-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={doSync} disabled={!getToken()}>Sincronizar</button>
-          <a
-            href={`${getApiBase()}/integrations/meli/debug?days_back=365`}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            onClick={openDebug}
             className="bg-gray-100 text-gray-800 px-4 py-2 rounded border"
-          >Ver debug</a>
+            disabled={!getToken()}
+          >Ver debug</button>
         </div>
         {statusMsg && <div className="mt-3 text-sm text-emerald-700">{statusMsg}</div>}
       </div>

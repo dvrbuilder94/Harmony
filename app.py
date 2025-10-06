@@ -59,18 +59,29 @@ def jwt_required(f):
     """Decorator for protecting endpoints with JWT."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Allow CORS preflight requests to pass without authentication
+        if request.method == 'OPTIONS':
+            return '', 204
+
         token = None
-        
-        # Get token from Authorization header - strict Bearer format
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            if not auth_header.startswith('Bearer '):
+
+        # Prefer Authorization header with Bearer token (case-insensitive)
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == 'bearer':
+                token = parts[1]
+            else:
                 return api_error("Invalid authorization header format. Use 'Bearer <token>'", 401)
-            try:
-                token = auth_header.split(" ")[1]
-            except IndexError:
-                return api_error("Invalid authorization header format. Use 'Bearer <token>'", 401)
-        
+
+        # Fallbacks: explicit token header or cookie (helps some clients)
+        if not token:
+            token = (
+                request.headers.get('X-Access-Token')
+                or request.cookies.get('access_token')
+                or request.cookies.get('token')
+            )
+
         if not token:
             return api_error("Authorization header with Bearer token is required", 401)
         
@@ -266,11 +277,30 @@ def api_error(message, status_code=400, details=None):
         "timestamp": datetime.utcnow().isoformat(),
         "message": message
     }
-    
+
     if details:
         error_data["details"] = details
-    
-    return jsonify(error_data), status_code
+
+    response = jsonify(error_data)
+    response.status_code = status_code
+
+    # Attach a proper WWW-Authenticate header for 401 responses to guide clients
+    if status_code == 401:
+        challenge = 'Bearer realm="api"'
+        # Provide helpful OAuth 2.0 error metadata where possible
+        if message == "Authorization header with Bearer token is required":
+            challenge += ', error="invalid_request", error_description="Authorization header missing"'
+        elif message == "Invalid authorization header format. Use 'Bearer <token>'":
+            challenge += ', error="invalid_request", error_description="Invalid authorization header format"'
+        elif message == "Token has expired":
+            challenge += ', error="invalid_token", error_description="Token expired"'
+        elif message == "Token is invalid":
+            challenge += ', error="invalid_token", error_description="Token invalid"'
+        else:
+            challenge += ', error="invalid_token"'
+        response.headers['WWW-Authenticate'] = challenge
+
+    return response
 
 # Health check endpoint
 @app.route('/health', methods=['GET'])

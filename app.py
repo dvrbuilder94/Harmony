@@ -411,7 +411,13 @@ def meli_auth_url():
     try:
         current_user_id = get_jwt_identity()
         from models import MercadoLibreCredentials
-        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        # Prefer the most recently updated credentials if duplicates exist
+        creds = (
+            MercadoLibreCredentials.query
+            .filter_by(user_id=current_user_id)
+            .order_by(MercadoLibreCredentials.updated_at.desc())
+            .first()
+        )
         if not creds:
             return api_error("Mercado Libre credentials not configured for this user", 400)
         client_id = creds.client_id
@@ -459,7 +465,12 @@ def meli_callback():
             return api_error("Invalid state", 400)
 
         # Load user-specific credentials
-        creds = MercadoLibreCredentials.query.filter_by(user_id=target_user_id).first()
+        creds = (
+            MercadoLibreCredentials.query
+            .filter_by(user_id=target_user_id)
+            .order_by(MercadoLibreCredentials.updated_at.desc())
+            .first()
+        )
         if not creds:
             return api_error("Mercado Libre credentials not configured for this user", 400)
         client_id = creds.client_id
@@ -511,7 +522,13 @@ def meli_callback():
         else:
             meli_user_id = token_json.get('user_id')
 
-        existing = MercadoLibreAccount.query.filter_by(user_id=user.id).first()
+        # Prefer the most recently updated account if duplicates exist
+        existing = (
+            MercadoLibreAccount.query
+            .filter_by(user_id=user.id)
+            .order_by(MercadoLibreAccount.updated_at.desc())
+            .first()
+        )
         if not existing:
             existing = MercadoLibreAccount(
                 user_id=user.id,
@@ -663,14 +680,29 @@ def meli_sync_orders():
         use_recent = mode_param.lower() == 'recent'
     from models import MercadoLibreAccount, MLOrder, MLOrderItem, MercadoLibreCredentials, CanonOrder, CanonOrderItem
 
-    account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+    # Prefer the most recently updated account if duplicates exist
+    account = (
+        MercadoLibreAccount.query
+        .filter_by(user_id=current_user_id)
+        .order_by(MercadoLibreAccount.updated_at.desc())
+        .first()
+    )
     if not account:
         return api_error("No Mercado Libre account linked", 400)
+    logger.info(
+        "MELI sync using account id=%s seller_hint=%s expires_at=%s",
+        getattr(account, 'id', None), getattr(account, 'meli_user_id', None), getattr(account, 'token_expires_at', None)
+    )
 
     # Refresh token if expired and we have refresh_token
     if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
         if account.refresh_token:
-            creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+            creds = (
+                MercadoLibreCredentials.query
+                .filter_by(user_id=current_user_id)
+                .order_by(MercadoLibreCredentials.updated_at.desc())
+                .first()
+            )
             if not creds:
                 return api_error("Mercado Libre credentials not configured for this user", 400)
             client_id = creds.client_id
@@ -1139,7 +1171,12 @@ def get_meli_credentials():
     try:
         current_user_id = get_jwt_identity()
         from models import MercadoLibreCredentials
-        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        creds = (
+            MercadoLibreCredentials.query
+            .filter_by(user_id=current_user_id)
+            .order_by(MercadoLibreCredentials.updated_at.desc())
+            .first()
+        )
         if not creds:
             return api_response({"credentials": None}, "No credentials configured")
         return api_response({"credentials": creds.to_safe_dict()}, "Credentials loaded")
@@ -1160,7 +1197,12 @@ def upsert_meli_credentials():
         if not client_id or not client_secret or not redirect_uri:
             return api_error("client_id, client_secret and redirect_uri are required", 400)
         from models import MercadoLibreCredentials
-        creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+        creds = (
+            MercadoLibreCredentials.query
+            .filter_by(user_id=current_user_id)
+            .order_by(MercadoLibreCredentials.updated_at.desc())
+            .first()
+        )
         if not creds:
             creds = MercadoLibreCredentials(
                 user_id=current_user_id,
@@ -1235,14 +1277,28 @@ def meli_preview_orders():
         except Exception:
             offset = 0
 
-        account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+        account = (
+            MercadoLibreAccount.query
+            .filter_by(user_id=current_user_id)
+            .order_by(MercadoLibreAccount.updated_at.desc())
+            .first()
+        )
         if not account:
             return api_error("No Mercado Libre account linked", 400)
+        logger.info(
+            "MELI preview using account id=%s seller_hint=%s expires_at=%s",
+            getattr(account, 'id', None), getattr(account, 'meli_user_id', None), getattr(account, 'token_expires_at', None)
+        )
 
         # Refresh if needed
         if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
             if account.refresh_token:
-                creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+                creds = (
+                    MercadoLibreCredentials.query
+                    .filter_by(user_id=current_user_id)
+                    .order_by(MercadoLibreCredentials.updated_at.desc())
+                    .first()
+                )
                 if not creds:
                     return api_error("Mercado Libre credentials not configured for this user", 400)
                 client_id = creds.client_id
@@ -1327,14 +1383,28 @@ def meli_debug():
         current_user_id = get_jwt_identity()
         from models import MercadoLibreAccount, MercadoLibreCredentials
 
-        account = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
+        account = (
+            MercadoLibreAccount.query
+            .filter_by(user_id=current_user_id)
+            .order_by(MercadoLibreAccount.updated_at.desc())
+            .first()
+        )
         if not account:
             return api_error("No Mercado Libre account linked", 400)
+        logger.info(
+            "MELI debug using account id=%s seller_hint=%s expires_at=%s",
+            getattr(account, 'id', None), getattr(account, 'meli_user_id', None), getattr(account, 'token_expires_at', None)
+        )
 
         # Attempt refresh if expired
         if getattr(account, 'token_expires_at', None) and account.token_expires_at <= datetime.utcnow():
             if account.refresh_token:
-                creds = MercadoLibreCredentials.query.filter_by(user_id=current_user_id).first()
+                creds = (
+                    MercadoLibreCredentials.query
+                    .filter_by(user_id=current_user_id)
+                    .order_by(MercadoLibreCredentials.updated_at.desc())
+                    .first()
+                )
                 if not creds:
                     return api_error("Mercado Libre credentials not configured for this user", 400)
                 client_id = creds.client_id

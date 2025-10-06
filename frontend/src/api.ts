@@ -22,7 +22,10 @@ export async function login(email: string, password: string) {
     body: JSON.stringify({ email, password })
   })
   if (!res.ok) throw new Error('Login failed')
-  return res.json()
+  const json = await res.json()
+  const token = (json && json.data && json.data.access_token) ? json.data.access_token : null
+  if (token) setToken(token)
+  return json
 }
 
 export async function getMeliAuthUrl(): Promise<string> {

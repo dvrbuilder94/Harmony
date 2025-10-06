@@ -229,6 +229,12 @@ with app.app_context():
                     'password': 'demo123',
                     'name': 'Usuario Demo',
                     'role': 'user'
+                },
+                {
+                    'email': 'demo2@demo.com',
+                    'password': 'demo123',
+                    'name': 'Usuario Demo 2',
+                    'role': 'user'
                 }
             ]
             
@@ -417,7 +423,9 @@ def meli_auth_url():
             'response_type': 'code',
             'client_id': client_id,
             'redirect_uri': redirect_uri,
-            'state': state
+            'state': state,
+            'prompt': 'login',
+            'force_login': 'true',
         })
         url = f"https://auth.mercadolibre.com/authorization?{params}"
         return api_response({"auth_url": url}, "Mercado Libre auth URL")
@@ -696,17 +704,21 @@ def meli_sync_orders():
 
     headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
-    # Ensure we have a seller id (meli_user_id). Try to fetch if missing
-    if not getattr(account, 'meli_user_id', None):
-        me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
-        if me_res.status_code == 200:
-            try:
-                account.meli_user_id = str(me_res.json().get('id'))
-                db.session.commit()
-            except Exception:
-                return api_error("Failed to determine Mercado Libre seller id", 500)
-        else:
-            return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
+    # Resolve seller id from current token to avoid stale linkage
+    seller_id = None
+    me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
+    if me_res.status_code == 200:
+        try:
+            seller_id = str(me_res.json().get('id'))
+            # Persist the resolved seller id for transparency
+            account.meli_user_id = seller_id
+            db.session.commit()
+        except Exception:
+            return api_error("Failed to determine Mercado Libre seller id", 500)
+    elif getattr(account, 'meli_user_id', None):
+        seller_id = account.meli_user_id
+    else:
+        return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
 
     # Get recent orders window (configurable)
     created_from = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
@@ -717,16 +729,16 @@ def meli_sync_orders():
     pages = 0
     debug_pages = []
     debug_urls = []
-    logger.info(f"MELI sync start user={current_user_id} seller={account.meli_user_id} days_back={days_back} mode={'recent' if use_recent else 'search'}")
+    logger.info(f"MELI sync start user={current_user_id} seller={seller_id} days_back={days_back} mode={'recent' if use_recent else 'search'}")
     while pages < max_pages:
         if use_recent:
             orders_url = (
-                f"https://api.mercadolibre.com/orders/search/recent?seller={account.meli_user_id}"
+                f"https://api.mercadolibre.com/orders/search/recent?seller={seller_id}"
                 f"&limit={limit}&offset={offset}"
             )
         else:
             orders_url = (
-                f"https://api.mercadolibre.com/orders/search?seller={account.meli_user_id}"
+                f"https://api.mercadolibre.com/orders/search?seller={seller_id}"
                 f"&order.date_created.from={created_from}&limit={limit}&offset={offset}&sort=date_desc"
             )
         logger.debug(f"MELI sync request url={orders_url}")
@@ -821,10 +833,10 @@ def meli_sync_orders():
             db.session.add(po)
 
     db.session.commit()
-    response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back, "seller": account.meli_user_id, "mode": "recent" if use_recent else "search"}
+    response_payload = {"saved": saved, "fetched": len(results), "window_days": days_back, "seller": seller_id, "mode": "recent" if use_recent else "search"}
     if debug_mode:
         response_payload["debug"] = {
-            "seller": account.meli_user_id,
+            "seller": seller_id,
             "created_from": created_from,
             "pages": debug_pages,
             "urls": debug_urls,
@@ -1192,9 +1204,10 @@ def delete_meli_account():
     try:
         current_user_id = get_jwt_identity()
         from models import MercadoLibreAccount
-        acc = MercadoLibreAccount.query.filter_by(user_id=current_user_id).first()
-        if acc:
-            db.session.delete(acc)
+        accs = MercadoLibreAccount.query.filter_by(user_id=current_user_id).all()
+        if accs:
+            for acc in accs:
+                db.session.delete(acc)
             db.session.commit()
         return api_response({}, "Account tokens deleted")
     except Exception as e:
@@ -1259,17 +1272,16 @@ def meli_preview_orders():
 
         headers = {"Authorization": f"Bearer {account.get_access_token()}"}
 
-        # Ensure seller id
-        if not getattr(account, 'meli_user_id', None):
-            me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
-            if me_res.status_code == 200:
-                try:
-                    account.meli_user_id = str(me_res.json().get('id'))
-                    db.session.commit()
-                except Exception:
-                    return api_error("Failed to determine Mercado Libre seller id", 500)
-            else:
-                return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
+        # Resolve seller id from current token to avoid stale linkage
+        me_res = requests.get("https://api.mercadolibre.com/users/me", headers=headers, timeout=20)
+        if me_res.status_code == 200:
+            try:
+                account.meli_user_id = str(me_res.json().get('id'))
+                db.session.commit()
+            except Exception:
+                return api_error("Failed to determine Mercado Libre seller id", 500)
+        elif not getattr(account, 'meli_user_id', None):
+            return api_error("Mercado Libre account missing seller id (meli_user_id)", 400)
 
         mode = request.args.get('mode')
         use_recent = isinstance(mode, str) and mode.lower() == 'recent'

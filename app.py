@@ -229,6 +229,12 @@ with app.app_context():
                     'password': 'demo123',
                     'name': 'Usuario Demo',
                     'role': 'user'
+                },
+                {
+                    'email': 'demo2@demo.com',
+                    'password': 'demo123',
+                    'name': 'Usuario Demo 2',
+                    'role': 'user'
                 }
             ]
             

@@ -36,6 +36,15 @@ if not JWT_SECRET_KEY:
 
 JWT_ALGORITHM = "HS256"
 
+# Email verification requirement (env-driven; defaults off if SMTP not configured)
+def is_smtp_configured():
+    return bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS'))
+
+REQUIRE_EMAIL_VERIFICATION = os.environ.get('REQUIRE_EMAIL_VERIFICATION')
+if REQUIRE_EMAIL_VERIFICATION is None:
+    REQUIRE_EMAIL_VERIFICATION = 'true' if is_smtp_configured() else 'false'
+require_email_verification = str(REQUIRE_EMAIL_VERIFICATION).lower() in ('1', 'true', 'yes')
+
 def create_access_token(identity):
     """Create JWT token with user identity."""
     payload = {
@@ -241,6 +250,12 @@ with app.app_context():
                     'role': 'admin'
                 },
                 {
+                    'email': 'demo1@demo.com',
+                    'password': 'demo123',
+                    'name': 'Usuario Demo 1',
+                    'role': 'user'
+                },
+                {
                     'email': 'vendedor@salesharmony.com', 
                     'password': 'vendedor123',
                     'name': 'Vendedor Usuario',
@@ -301,6 +316,22 @@ with app.app_context():
             
             db.session.commit()
             logger.info("Test users initialized successfully (development mode only)")
+        
+        # Seed baseline demo users if table is empty and seeding allowed
+        if os.environ.get('SEED_BASE_DEMOS', 'true').lower() in ('1','true','yes'):
+            from models import User
+            if User.query.count() == 0:
+                for demo_email in ['demo1@demo.com', 'demo2@demo.com', 'demo3@demo.com']:
+                    u = User(email=demo_email, name=demo_email.split('@')[0].title(), role='user', is_active=True)
+                    u.set_password('demo123')
+                    try:
+                        u.is_email_verified = True
+                        u.email_verified_at = datetime.utcnow()
+                    except Exception:
+                        pass
+                    db.session.add(u)
+                db.session.commit()
+                logger.info("Seeded baseline demo users (empty DB)")
         
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
@@ -383,17 +414,19 @@ def register():
         
         if not data or not data.get('email') or not data.get('password'):
             return api_error("Email and password are required", 400)
+        # Normalize email
+        email = data['email'].strip().lower()
         
         # Import User model here to avoid circular imports
         from models import User
         
         # Check if user already exists
-        if User.query.filter_by(email=data['email']).first():
+        if User.query.filter_by(email=email).first():
             return api_error("Email already registered", 409)
         
         # Create new user inactive + unverified
         user = User(
-            email=data['email'],
+            email=email,
             name=data.get('name', ''),
             role='user',
             is_active=True,  # account usable after verification in our flow; keep active for now
@@ -402,14 +435,24 @@ def register():
         
         db.session.add(user)
         db.session.commit()
-
-        # Send verification email if SMTP configured
-        try:
-            send_verification_email(user)
-        except Exception as e:
-            logger.warning(f"Could not send verification email: {e}")
-
-        return api_response(user.to_dict(), "User registered successfully. Please verify your email.", 201)
+        # Email verification flow (env-driven)
+        if require_email_verification:
+            # Send verification email if SMTP configured
+            try:
+                send_verification_email(user)
+            except Exception as e:
+                logger.warning(f"Could not send verification email: {e}")
+            return api_response(user.to_dict(), "User registered successfully. Please verify your email.", 201)
+        else:
+            # Auto-verify when verification is not required
+            try:
+                user.is_email_verified = True
+                user.email_verified_at = datetime.utcnow()
+                db.session.add(user)
+                db.session.commit()
+            except Exception as e:
+                logger.warning(f"Could not auto-verify user on registration: {e}")
+            return api_response(user.to_dict(), "User registered successfully.", 201)
     
     except Exception as e:
         logger.error(f"Registration error: {e}")
@@ -424,11 +467,13 @@ def login():
         
         if not data or not data.get('email') or not data.get('password'):
             return api_error("Email and password are required", 400)
+        # Normalize email
+        email = data['email'].strip().lower()
         
         from models import User
         
         # Find user
-        user = User.query.filter_by(email=data['email']).first()
+        user = User.query.filter_by(email=email).first()
         
         if not user or not user.check_password(data['password']):
             return api_error("Invalid email or password", 401)
@@ -436,7 +481,7 @@ def login():
         if not user.is_active:
             return api_error("Account is deactivated", 401)
 
-        if not getattr(user, 'is_email_verified', False):
+        if require_email_verification and not getattr(user, 'is_email_verified', False):
             return api_error("Email not verified. Please check your inbox.", 401)
         
         # Create access token (if JWT is available)
@@ -451,7 +496,7 @@ def login():
             # Basic response without JWT for now
             return api_response({
                 "user": user.to_dict(),
-                "token": "basic-token-" + user.id  # Temporary for testing
+                "token": f"basic-token-{user.id}"  # Temporary for testing
             }, "Login successful (basic auth)")
     
     except Exception as e:
@@ -514,7 +559,7 @@ def verify_email():
             return api_error('token is required', 400)
         t = decode_email_verification_token(token)
         from models import User
-        user = User.query.get(t.get('user_id'))
+        user = db.session.get(User, t.get('user_id'))
         if not user or user.email != t.get('email'):
             return api_error('Invalid token', 400)
         if getattr(user, 'is_email_verified', False):
@@ -643,7 +688,7 @@ def meli_callback():
 
         # Identify correct user from state
         from models import User, MercadoLibreAccount
-        user = User.query.get(target_user_id)
+        user = db.session.get(User, target_user_id)
         if not user:
             return api_error("User from state not found", 404)
 
@@ -711,7 +756,7 @@ def get_current_user():
         user_id = get_jwt_identity()
         from models import User
         
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return api_error("User not found", 404)
         

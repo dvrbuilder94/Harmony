@@ -18,6 +18,10 @@ class User(db.Model):
     name = db.Column(db.String(100), nullable=True)
     role = db.Column(db.String(50), nullable=False, default='user')
     is_active = db.Column(db.Boolean, default=True)
+    # Email verification fields
+    is_email_verified = db.Column(db.Boolean, default=False)
+    email_verified_at = db.Column(db.DateTime, nullable=True)
+    email_verification_sent_at = db.Column(db.DateTime, nullable=True)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -38,6 +42,7 @@ class User(db.Model):
             'name': self.name,
             'role': self.role,
             'is_active': self.is_active,
+            'is_email_verified': self.is_email_verified,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat()
         }

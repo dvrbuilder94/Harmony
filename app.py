@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 import jwt
 import os
 from functools import wraps
+import secrets
 from datetime import datetime, timedelta
 
 JWT_AVAILABLE = True
@@ -54,6 +55,27 @@ def create_state_token(user_id):
 
 def decode_state_token(state_token):
     return jwt.decode(state_token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+
+# Email verification token helpers (HMAC via JWT)
+def create_email_verification_token(user_id, email):
+    payload = {
+        'user_id': user_id,
+        'email': email,
+        'purpose': 'email_verification',
+        'exp': datetime.utcnow() + timedelta(hours=24),
+        'iat': datetime.utcnow()
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def decode_email_verification_token(token):
+    payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    if payload.get('purpose') != 'email_verification':
+        raise jwt.InvalidTokenError('Invalid token purpose')
+    return payload
+
+def get_frontend_base_url():
+    url = os.environ.get('FRONTEND_URL') or 'http://localhost:5173'
+    return url.rstrip('/')
 
 def jwt_required(f):
     """Decorator for protecting endpoints with JWT."""
@@ -329,7 +351,7 @@ def health():
 # Authentication endpoints
 @app.route('/auth/register', methods=['POST'])
 def register():
-    """Register new user."""
+    """Register new user with email verification flow."""
     try:
         data = request.get_json()
         
@@ -343,22 +365,25 @@ def register():
         if User.query.filter_by(email=data['email']).first():
             return api_error("Email already registered", 409)
         
-        # Create new user
+        # Create new user inactive + unverified
         user = User(
             email=data['email'],
             name=data.get('name', ''),
-            role='user'  # Force all new registrations to be regular users
+            role='user',
+            is_active=True,  # account usable after verification in our flow; keep active for now
         )
         user.set_password(data['password'])
         
         db.session.add(user)
         db.session.commit()
-        
-        return api_response(
-            user.to_dict(),
-            "User registered successfully",
-            201
-        )
+
+        # Send verification email if SMTP configured
+        try:
+            send_verification_email(user)
+        except Exception as e:
+            logger.warning(f"Could not send verification email: {e}")
+
+        return api_response(user.to_dict(), "User registered successfully. Please verify your email.", 201)
     
     except Exception as e:
         logger.error(f"Registration error: {e}")
@@ -384,6 +409,9 @@ def login():
         
         if not user.is_active:
             return api_error("Account is deactivated", 401)
+
+        if not getattr(user, 'is_email_verified', False):
+            return api_error("Email not verified. Please check your inbox.", 401)
         
         # Create access token (if JWT is available)
         if JWT_AVAILABLE:
@@ -403,6 +431,97 @@ def login():
     except Exception as e:
         logger.error(f"Login error: {e}")
         return api_error("Login failed", 500)
+
+# Email sending utility using SMTP (optional)
+def send_email(subject: str, to_email: str, html_body: str, text_body: str = None):
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    smtp_host = os.environ.get('SMTP_HOST')
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    smtp_user = os.environ.get('SMTP_USER')
+    smtp_pass = os.environ.get('SMTP_PASS')
+    from_email = os.environ.get('SMTP_FROM', smtp_user or 'no-reply@salesharmony.local')
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        raise RuntimeError('SMTP not configured')
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = from_email
+    msg['To'] = to_email
+    if text_body:
+        msg.attach(MIMEText(text_body, 'plain'))
+    msg.attach(MIMEText(html_body, 'html'))
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_email, [to_email], msg.as_string())
+
+def send_verification_email(user):
+    token = create_email_verification_token(user.id, user.email)
+    verify_url = f"{get_frontend_base_url()}/verify-email?token={token}"
+    subject = "Verifica tu correo - SalesHarmony"
+    html = f"""
+    <p>Hola {user.name or user.email},</p>
+    <p>Gracias por registrarte en SalesHarmony. Por favor verifica tu correo haciendo clic en el siguiente enlace:</p>
+    <p><a href="{verify_url}">Verificar email</a></p>
+    <p>Si no fuiste tú, ignora este mensaje.</p>
+    """
+    text = f"Visita este enlace para verificar tu email: {verify_url}"
+    try:
+        send_email(subject, user.email, html, text)
+        from models import User
+        user.email_verification_sent_at = datetime.utcnow()
+        db.session.add(user)
+        db.session.commit()
+    except Exception as e:
+        logger.warning(f"send_verification_email failed: {e}")
+
+@app.route('/auth/verify-email', methods=['POST'])
+def verify_email():
+    try:
+        payload = request.get_json() or {}
+        token = payload.get('token')
+        if not token:
+            return api_error('token is required', 400)
+        t = decode_email_verification_token(token)
+        from models import User
+        user = User.query.get(t.get('user_id'))
+        if not user or user.email != t.get('email'):
+            return api_error('Invalid token', 400)
+        if getattr(user, 'is_email_verified', False):
+            return api_response(user.to_dict(), 'Email already verified')
+        user.is_email_verified = True
+        user.email_verified_at = datetime.utcnow()
+        db.session.add(user)
+        db.session.commit()
+        return api_response(user.to_dict(), 'Email verified')
+    except jwt.ExpiredSignatureError:
+        return api_error('Token expired', 400)
+    except Exception as e:
+        logger.error(f'verify_email error: {e}')
+        return api_error('Failed to verify email', 500)
+
+@app.route('/auth/resend-verification', methods=['POST'])
+def resend_verification():
+    try:
+        payload = request.get_json() or {}
+        email = payload.get('email')
+        if not email:
+            return api_error('email is required', 400)
+        from models import User
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return api_error('User not found', 404)
+        if getattr(user, 'is_email_verified', False):
+            return api_response({}, 'Email already verified')
+        send_verification_email(user)
+        return api_response({}, 'Verification email sent')
+    except Exception as e:
+        logger.error(f'resend_verification error: {e}')
+        return api_error('Failed to resend verification email', 500)
 
 # Mercado Libre OAuth endpoints
 @app.route('/auth/meli/url', methods=['GET'])

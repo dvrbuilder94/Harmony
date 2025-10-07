@@ -28,6 +28,54 @@ export async function login(email: string, password: string) {
   return json
 }
 
+export async function registerAccount(params: { email: string; password: string; name?: string }) {
+  if ((import.meta as any).env?.VITE_MOCK === 'true') {
+    return { data: { user: { email: params.email }, message: 'mock' } }
+  }
+  const res = await fetch(`${getApiBase()}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || 'Register failed')
+  }
+  return res.json()
+}
+
+export async function verifyEmail(token: string) {
+  if ((import.meta as any).env?.VITE_MOCK === 'true') {
+    return { data: { ok: true } }
+  }
+  const res = await fetch(`${getApiBase()}/auth/verify-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token })
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || 'Verification failed')
+  }
+  return res.json()
+}
+
+export async function resendVerification(email: string) {
+  if ((import.meta as any).env?.VITE_MOCK === 'true') {
+    return { data: { ok: true } }
+  }
+  const res = await fetch(`${getApiBase()}/auth/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email })
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || 'Resend failed')
+  }
+  return res.json()
+}
+
 export async function getMeliAuthUrl(): Promise<string> {
   if ((import.meta as any).env?.VITE_MOCK === 'true') {
     return 'https://example.com/mock-auth'

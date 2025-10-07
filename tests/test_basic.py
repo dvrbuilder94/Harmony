@@ -41,7 +41,27 @@ def test_auth_flow():
     })
     assert res.status_code == 201
 
-    # Login
+    # Login should fail until email verified
+    res = client.post('/auth/login', json={
+        "email": "test@example.com",
+        "password": "secret"
+    })
+    assert res.status_code == 401
+
+    # Generate verification token using server helper
+    from app import create_email_verification_token
+    token = create_email_verification_token('dummy', 'dummy@example.com')  # placeholder
+    # But we need real user's token; fetch user id from DB
+    from models import User, db
+    u = User.query.filter_by(email='test@example.com').first()
+    assert u is not None
+    token = create_email_verification_token(u.id, u.email)
+
+    # Verify email
+    res = client.post('/auth/verify-email', json={"token": token})
+    assert res.status_code == 200
+
+    # Login again
     res = client.post('/auth/login', json={
         "email": "test@example.com",
         "password": "secret"

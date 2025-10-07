@@ -257,7 +257,13 @@ with app.app_context():
                     'password': 'demo123',
                     'name': 'Usuario Demo 2',
                     'role': 'user'
-                }
+                },
+                {
+                    'email': 'demo3@demo.com',
+                    'password': 'demo123',
+                    'name': 'Usuario Demo 3',
+                    'role': 'user'
+                },
             ]
             
             for user_data in test_users:
@@ -270,8 +276,28 @@ with app.app_context():
                         is_active=True
                     )
                     new_user.set_password(user_data['password'])  # Use hashed password
+                    # Mark as verified for demo convenience
+                    try:
+                        new_user.is_email_verified = True
+                        new_user.email_verified_at = datetime.utcnow()
+                    except Exception:
+                        pass
                     db.session.add(new_user)
                     logger.info(f"Created test user: {user_data['email']}")
+                else:
+                    # Ensure predictable credentials and verification for demo users
+                    existing_user.name = user_data['name']
+                    existing_user.role = user_data['role']
+                    existing_user.is_active = True
+                    try:
+                        existing_user.is_email_verified = True
+                        existing_user.email_verified_at = existing_user.email_verified_at or datetime.utcnow()
+                    except Exception:
+                        pass
+                    if user_data.get('password'):
+                        existing_user.set_password(user_data['password'])
+                    db.session.add(existing_user)
+                    logger.info(f"Ensured test user exists and is verified: {user_data['email']}")
             
             db.session.commit()
             logger.info("Test users initialized successfully (development mode only)")

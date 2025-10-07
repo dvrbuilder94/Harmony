@@ -1315,7 +1315,7 @@ def upsert_meli_credentials():
         site_id = data.get('site_id', 'MLC')
         if not client_id or not client_secret or not redirect_uri:
             return api_error("client_id, client_secret and redirect_uri are required", 400)
-        from models import MercadoLibreCredentials
+        from models import MercadoLibreCredentials, MercadoLibreAccount
         creds = (
             MercadoLibreCredentials.query
             .filter_by(user_id=current_user_id)
@@ -1336,8 +1336,12 @@ def upsert_meli_credentials():
             creds.site_id = site_id
             creds.redirect_uri = redirect_uri
         creds.set_client_secret(client_secret)
+        # Clear any existing account tokens for this user so a new connection is required
+        old_accs = MercadoLibreAccount.query.filter_by(user_id=current_user_id).all()
+        for acc in old_accs:
+            db.session.delete(acc)
         db.session.commit()
-        return api_response({"credentials": creds.to_safe_dict()}, "Credentials saved")
+        return api_response({"credentials": creds.to_safe_dict()}, "Credentials saved (previous tokens cleared)")
     except Exception as e:
         logger.error(f"Upsert creds error: {e}")
         db.session.rollback()
@@ -1364,13 +1368,27 @@ def delete_meli_credentials():
 def delete_meli_account():
     try:
         current_user_id = get_jwt_identity()
-        from models import MercadoLibreAccount
+        from models import MercadoLibreAccount, MLOrder, MLOrderItem, CanonOrder, CanonOrderItem, CanonPayout
+        purge = request.args.get('purge')
+        purge_data = isinstance(purge, str) and purge.lower() in ('1','true','yes')
         accs = MercadoLibreAccount.query.filter_by(user_id=current_user_id).all()
         if accs:
             for acc in accs:
                 db.session.delete(acc)
-            db.session.commit()
-        return api_response({}, "Account tokens deleted")
+        if purge_data:
+            # Remove synced data for this user for a clean reconnection
+            # Delete Mercado Libre orders and items for this user
+            ml_order_ids_subq = db.session.query(MLOrder.id).filter(MLOrder.user_id == current_user_id).subquery()
+            db.session.query(MLOrderItem).filter(MLOrderItem.ml_order_id.in_(ml_order_ids_subq)).delete(synchronize_session=False)
+            db.session.query(MLOrder).filter(MLOrder.user_id == current_user_id).delete(synchronize_session=False)
+
+            # Delete canonical items/payouts for this user's orders
+            canon_order_ids_subq = db.session.query(CanonOrder.id).filter(CanonOrder.user_id == current_user_id).subquery()
+            db.session.query(CanonOrderItem).filter(CanonOrderItem.order_id.in_(canon_order_ids_subq)).delete(synchronize_session=False)
+            db.session.query(CanonPayout).filter(CanonPayout.order_id.in_(canon_order_ids_subq)).delete(synchronize_session=False)
+            db.session.query(CanonOrder).filter(CanonOrder.user_id == current_user_id).delete(synchronize_session=False)
+        db.session.commit()
+        return api_response({}, "Account tokens deleted" + (" and data purged" if purge_data else ""))
     except Exception as e:
         logger.error(f"Delete account error: {e}")
         db.session.rollback()

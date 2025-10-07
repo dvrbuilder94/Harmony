@@ -9,6 +9,7 @@ export default function Settings() {
   const [siteId, setSiteId] = useState('MLC')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [purging, setPurging] = useState(false)
   useEffect(() => {
     if (!getToken()) return
     fetch(`${getApiBase()}/auth/me`, { headers: { Authorization: `Bearer ${getToken()}` } })
@@ -51,6 +52,17 @@ export default function Settings() {
       setLoading(false)
     }
   }
+  const clearAccountTokensAndData = async () => {
+    setPurging(true)
+    try {
+      await fetch(`${getApiBase()}/integrations/meli/account?purge=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${getToken()}` } })
+      alert('Tokens y datos relacionados eliminados. Conecta nuevamente y sincroniza.')
+    } catch {
+      alert('No se pudo limpiar tokens y datos')
+    } finally {
+      setPurging(false)
+    }
+  }
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Configuración</h1>
@@ -65,6 +77,7 @@ export default function Settings() {
         <div className="flex gap-2">
           <button className="bg-gray-900 text-white px-4 py-2 rounded disabled:opacity-50" onClick={saveCreds} disabled={saving}>Guardar credenciales</button>
           <button className="bg-red-600 text-white px-4 py-2 rounded disabled:opacity-50" onClick={clearAccountTokens} disabled={loading}>Eliminar tokens de cuenta</button>
+          <button className="bg-red-800 text-white px-4 py-2 rounded disabled:opacity-50" onClick={clearAccountTokensAndData} disabled={purging}>Eliminar tokens y datos</button>
         </div>
       </div>
     </div>

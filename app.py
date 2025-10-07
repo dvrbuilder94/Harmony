@@ -36,13 +36,10 @@ if not JWT_SECRET_KEY:
 
 JWT_ALGORITHM = "HS256"
 
-# Email verification requirement (env-driven; defaults off if SMTP not configured)
-def is_smtp_configured():
-    return bool(os.environ.get('SMTP_HOST') and os.environ.get('SMTP_USER') and os.environ.get('SMTP_PASS'))
-
-REQUIRE_EMAIL_VERIFICATION = os.environ.get('REQUIRE_EMAIL_VERIFICATION')
-if REQUIRE_EMAIL_VERIFICATION is None:
-    REQUIRE_EMAIL_VERIFICATION = 'true' if is_smtp_configured() else 'false'
+# Email verification requirement
+# Default to requiring email verification regardless of SMTP configuration.
+# Can be disabled explicitly via REQUIRE_EMAIL_VERIFICATION=false
+REQUIRE_EMAIL_VERIFICATION = os.environ.get('REQUIRE_EMAIL_VERIFICATION', 'true')
 require_email_verification = str(REQUIRE_EMAIL_VERIFICATION).lower() in ('1', 'true', 'yes')
 
 def create_access_token(identity):
@@ -632,6 +629,16 @@ def meli_auth_url():
 @app.route('/auth/meli/callback', methods=['GET'])
 def meli_callback():
     try:
+        # Validate encryption key early to avoid opaque 500s later
+        enc_key = os.environ.get('ENCRYPTION_KEY')
+        try:
+            if not enc_key:
+                return api_error("ENCRYPTION_KEY is not set. Generate a Fernet key and set ENCRYPTION_KEY.", 500)
+            # Validate format
+            _ = Fernet(enc_key.encode() if isinstance(enc_key, str) else enc_key)
+        except Exception as e:
+            return api_error(f"Invalid ENCRYPTION_KEY: {e}", 500)
+
         code = request.args.get('code')
         state = request.args.get('state')
         if not code:
@@ -664,7 +671,11 @@ def meli_callback():
         if not creds:
             return api_error("Mercado Libre credentials not configured for this user", 400)
         client_id = creds.client_id
-        client_secret = creds.get_client_secret()
+        # Decrypt client_secret with clear errors if key mismatched
+        try:
+            client_secret = creds.get_client_secret()
+        except Exception as e:
+            return api_error("Failed to decrypt Mercado Libre client_secret. Ensure ENCRYPTION_KEY is correct and re-save credentials.", 500, details=str(e))
         redirect_uri = creds.redirect_uri
 
         token_res = requests.post(
@@ -732,7 +743,10 @@ def meli_callback():
             existing.token_expires_at = expires_at
             existing.meli_user_id = meli_user_id or existing.meli_user_id
         # Encrypt and set tokens
-        existing.set_tokens(access_token, token_json.get('refresh_token'), expires_at)
+        try:
+            existing.set_tokens(access_token, token_json.get('refresh_token'), expires_at)
+        except Exception as e:
+            return api_error("Failed to encrypt and store tokens. Check ENCRYPTION_KEY configuration.", 500, details=str(e))
         db.session.commit()
 
         # Redirect back to frontend if configured, to improve UX
